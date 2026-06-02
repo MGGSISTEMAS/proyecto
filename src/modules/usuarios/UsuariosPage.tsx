@@ -24,6 +24,7 @@ import { contarUsuariosPorRol, type CustomRole } from './roles.repository';
 import { RolesPermisosPanel } from './RolesPermisosPanel';
 import { NuevoRolModal, GestionarRolesModal } from './RolesModales';
 import { useSession } from '@/modules/auth/authStore';
+import { usePermissions } from '@/modules/auth/PermissionsContext';
 import { GestionarCategoriasModal } from '@/shared/ui/GestionarCategoriasModal';
 
 type View = 'creacion' | 'roles';
@@ -39,6 +40,7 @@ type ModalKind =
 type RoleQuickModal = 'none' | 'crear' | 'gestionar';
 
 export function UsuariosPage() {
+  const canWrite = usePermissions().can('usuarios', 'escritura');
   const [usuarios, setUsuarios] = useState<Usuario[]>([]);
   const [roles, setRoles] = useState<CustomRole[]>([]);
   const [loading, setLoading] = useState(true);
@@ -59,20 +61,19 @@ export function UsuariosPage() {
   const refresh = useCallback(async () => {
     try {
       setError(null);
-      const [rows, rolesList, counts] = await Promise.all([
+      // Todo lo que no depende de `rows` va en un solo lote paralelo.
+      const [rows, rolesList, counts, conteoD] = await Promise.all([
         listUsuarios(),
         loadRolesAndCache(),
         contarUsuariosPorRol().catch(() => ({} as Record<string, number>)),
+        contarUsuariosPorDepartamento().catch(() => ({} as Record<string, number>)),
       ]);
       setUsuarios(rows);
       setRoles(rolesList);
       setConteoRoles(counts);
-      const [deptos, conteoD] = await Promise.all([
-        getDepartamentos(rows),
-        contarUsuariosPorDepartamento().catch(() => ({} as Record<string, number>)),
-      ]);
-      setDepartamentos(deptos);
       setConteoDeptos(conteoD);
+      // Único paso dependiente: la taxonomía de departamentos necesita `rows`.
+      setDepartamentos(await getDepartamentos(rows));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error al cargar usuarios');
     }
@@ -142,7 +143,7 @@ export function UsuariosPage() {
       )}
 
       {view === 'roles' ? (
-        <RolesPermisosPanel />
+        <RolesPermisosPanel readOnly={!canWrite} onRolesChanged={refresh} />
       ) : (
       <>
       <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
@@ -188,13 +189,15 @@ export function UsuariosPage() {
           <option value="activo">Activos</option>
           <option value="inactivo">Deshabilitados</option>
         </select>
-        <button
-          className="btn btn-primary"
-          onClick={() => setModal({ kind: 'create' })}
-          style={{ marginLeft: 'auto' }}
-        >
-          + Agregar usuario
-        </button>
+        {canWrite && (
+          <button
+            className="btn btn-primary"
+            onClick={() => setModal({ kind: 'create' })}
+            style={{ marginLeft: 'auto' }}
+          >
+            + Agregar usuario
+          </button>
+        )}
       </div>
 
       {loading ? (
@@ -234,12 +237,14 @@ export function UsuariosPage() {
                   <td><StatusBadge estado={u.estado} /></td>
                   <td className="muted" style={{ fontSize: '.82rem' }}>{dateTime(u.created_at)}</td>
                   <td className="actions">
-                    <button
-                      className="btn btn-sm btn-ghost"
-                      onClick={() => setModal({ kind: 'edit', usuario: u })}
-                    >
-                      Editar
-                    </button>
+                    {canWrite && (
+                      <button
+                        className="btn btn-sm btn-ghost"
+                        onClick={() => setModal({ kind: 'edit', usuario: u })}
+                      >
+                        Editar
+                      </button>
+                    )}
                     <button
                       className="btn btn-sm btn-ghost"
                       onClick={() => setModal({ kind: 'detail', usuario: u })}

@@ -7,6 +7,9 @@ export type ModuleKey =
   | 'proveedores'
   | 'inventario'
   | 'produccion'
+  | 'salidas'
+  | 'combustible'
+  | 'tesoreria'
   | 'usuarios'
   | 'ajustes';
 
@@ -18,6 +21,57 @@ export interface ModulePermission {
 
 export type RolePermisos = Record<ModuleKey, ModulePermission>;
 export type AllPermisos = Record<RoleKey, RolePermisos>;
+
+/** Lista canónica de módulos del sistema. Fuente única para la matriz, el menú y los guards. */
+export const MODULES: { key: ModuleKey; label: string }[] = [
+  { key: 'dashboard',   label: 'Dashboard' },
+  { key: 'pedidos',     label: 'Pedidos / Compras' },
+  { key: 'proveedores', label: 'Proveedores' },
+  { key: 'inventario',  label: 'Inventario' },
+  { key: 'produccion',  label: 'Producción' },
+  { key: 'salidas',     label: 'Salidas / Traslados' },
+  { key: 'combustible', label: 'Combustible' },
+  { key: 'tesoreria',   label: 'Tesorería' },
+  { key: 'usuarios',    label: 'Usuarios' },
+  { key: 'ajustes',     label: 'Ajustes' },
+];
+
+export const emptyPermission: ModulePermission = { lectura: false, escritura: false, full: false };
+
+/** Permisos por defecto de un rol cuando la matriz aún no tiene fila guardada en BD. */
+export function defaultsFor(role: RoleKey): RolePermisos {
+  const all: RolePermisos = MODULES.reduce<RolePermisos>((acc, m) => {
+    acc[m.key] = { ...emptyPermission };
+    return acc;
+  }, {} as RolePermisos);
+
+  if (role === 'admin') {
+    MODULES.forEach((m) => (all[m.key] = { lectura: true, escritura: true, full: true }));
+  } else if (role === 'analista') {
+    (['dashboard', 'pedidos', 'proveedores', 'inventario', 'produccion', 'salidas', 'combustible', 'ajustes'] as ModuleKey[]).forEach((k) => {
+      all[k] = { lectura: true, escritura: true, full: false };
+    });
+    all.usuarios = { lectura: true, escritura: false, full: false };
+    all.tesoreria = { lectura: true, escritura: false, full: false };
+  } else if (role === 'obrero') {
+    all.dashboard  = { lectura: true, escritura: false, full: false };
+    all.pedidos    = { lectura: true, escritura: true, full: false };
+    all.inventario = { lectura: true, escritura: true, full: false };
+    all.produccion = { lectura: true, escritura: true, full: false };
+    all.ajustes    = { lectura: true, escritura: false, full: false };
+  } else {
+    all.dashboard = { lectura: true, escritura: false, full: false };
+  }
+  return all;
+}
+
+/** Rellena los módulos faltantes de una fila parcial con `emptyPermission`. */
+export function normalizeRolePermisos(stored: Partial<RolePermisos>): RolePermisos {
+  return MODULES.reduce<RolePermisos>((acc, m) => {
+    acc[m.key] = { ...emptyPermission, ...stored[m.key] };
+    return acc;
+  }, {} as RolePermisos);
+}
 
 const TABLE = 'roles_permisos';
 
@@ -36,6 +90,26 @@ export async function loadPermisos(): Promise<AllPermisos | null> {
     acc[row.role] = row.permisos;
     return acc;
   }, {} as AllPermisos);
+}
+
+/** Carga la matriz de permisos de un rol concreto. `null` si la fila aún no existe. */
+export async function loadRolePermisos(role: RoleKey): Promise<RolePermisos | null> {
+  const { data, error } = await supabase.from(TABLE).select('permisos').eq('role', role).maybeSingle();
+  if (error) throw error;
+  return (data?.permisos as RolePermisos | undefined) ?? null;
+}
+
+/** Persiste los permisos de UN solo rol (autoguardado por celda en la matriz). */
+export async function savePermisosRole(
+  role: RoleKey,
+  permisos: RolePermisos,
+  actorEmail: string,
+): Promise<void> {
+  const { error } = await supabase.from(TABLE).upsert(
+    { role, permisos, updated_at: new Date().toISOString(), updated_by: actorEmail },
+    { onConflict: 'role' },
+  );
+  if (error) throw error;
 }
 
 export async function savePermisos(all: AllPermisos, actorEmail: string): Promise<void> {

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useSession, signOut } from '@/modules/auth/authStore';
 import { cambiarMiClave } from './usuarios.repository';
 import { toast } from '@/shared/ui/Toast';
@@ -7,9 +7,24 @@ import { toast } from '@/shared/ui/Toast';
 export function CambiarClavePage() {
   const { user, loading } = useSession();
   const navigate = useNavigate();
+  const location = useLocation();
   const [clave, setClave] = useState('');
   const [confirmacion, setConfirmacion] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  // Si el usuario llega desde otra pantalla del app (ej. Ajustes), `state.from`
+  // viene seteado: "Volver" lo lleva de regreso allá sin cerrar sesión.
+  // "Aceptar" siempre cierra sesión y manda al landing porque al cambiar la
+  // clave el JWT vigente queda obsoleto y se debe reingresar.
+  const fromInterno = (location.state as { from?: string } | null)?.from;
+  const esCambioVoluntario = Boolean(fromInterno);
+
+  // Validación en vivo: la confirmación debe coincidir con la clave nueva.
+  const claveTrim = clave.trim();
+  const confTrim = confirmacion.trim();
+  const largoOk = claveTrim.length >= 6;
+  const coincide = largoOk && claveTrim === confTrim;
+  const mostrarNoCoincide = confTrim.length > 0 && claveTrim !== confTrim;
 
   if (loading) return <div className="p-8">Cargando…</div>;
   if (!user) {
@@ -30,9 +45,10 @@ export function CambiarClavePage() {
     setSubmitting(true);
     try {
       await cambiarMiClave(c);
-      toast('Clave actualizada · ingresa con la clave nueva', 'success');
+      // Independientemente de cómo se llegó, tras cambiar la clave se cierra
+      // sesión y se manda al landing para que el usuario reingrese.
+      toast('Clave cambiada · debes iniciar sesión nuevamente', 'success');
       await signOut();
-      // Vuelve al landing para que el usuario reingrese con la clave nueva.
       navigate('/', { replace: true });
     } catch (e) {
       toast(e instanceof Error ? e.message : 'No se pudo cambiar la clave', 'error');
@@ -42,7 +58,12 @@ export function CambiarClavePage() {
   }
 
   async function handleVolver() {
-    // Cancelar el cambio cierra la sesión y vuelve al landing. El flag
+    if (esCambioVoluntario && fromInterno) {
+      // Cancela y regresa a la pantalla de origen, sin cerrar sesión.
+      navigate(fromInterno, { replace: true });
+      return;
+    }
+    // Cambio forzado: cancelar cierra la sesión y vuelve al landing. El flag
     // must_change_password queda intacto, por lo que la próxima vez que el
     // usuario entre se le volverá a forzar el cambio.
     try { await signOut(); } catch { /* opcional */ }
@@ -124,8 +145,19 @@ export function CambiarClavePage() {
             onChange={(e) => setConfirmacion(e.target.value)}
             placeholder="Repite la clave nueva"
             disabled={submitting}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleAceptar(); }}
+            style={mostrarNoCoincide ? { borderColor: 'var(--danger)' } : undefined}
+            onKeyDown={(e) => { if (e.key === 'Enter' && coincide) handleAceptar(); }}
           />
+          {mostrarNoCoincide && (
+            <small style={{ color: 'var(--danger)', marginTop: '.35rem', display: 'block' }}>
+              Las claves no coinciden.
+            </small>
+          )}
+          {coincide && (
+            <small style={{ color: 'var(--success)', marginTop: '.35rem', display: 'block' }}>
+              ✓ Las claves coinciden.
+            </small>
+          )}
         </div>
 
         <div style={{ display: 'flex', gap: '.75rem', marginTop: '1.5rem', justifyContent: 'center', flexWrap: 'wrap' }}>
@@ -140,7 +172,8 @@ export function CambiarClavePage() {
           <button
             className="btn btn-primary"
             onClick={handleAceptar}
-            disabled={submitting}
+            disabled={submitting || !coincide}
+            title={!coincide ? 'Las dos claves deben coincidir (mínimo 6 caracteres)' : ''}
             style={{ minWidth: 160, justifyContent: 'center', textAlign: 'center' }}
           >
             {submitting ? 'Guardando…' : 'Aceptar'}

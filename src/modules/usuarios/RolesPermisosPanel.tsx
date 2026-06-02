@@ -5,8 +5,12 @@ import { ConfirmDialog } from '@/shared/ui/Modal';
 import { useSession } from '@/modules/auth/authStore';
 import {
   loadPermisos,
-  savePermisos,
+  savePermisosRole,
   eliminarPermisosRol,
+  normalizeRolePermisos,
+  MODULES,
+  emptyPermission as empty,
+  defaultsFor,
   type AllPermisos,
   type ModuleKey,
   type ModulePermission,
@@ -21,43 +25,6 @@ import {
 } from './roles.repository';
 import { setRolesCache } from './usuarios.repository';
 import { NuevoRolModal, GestionarRolesModal } from './RolesModales';
-
-const MODULES: { key: ModuleKey; label: string }[] = [
-  { key: 'dashboard',   label: 'Dashboard' },
-  { key: 'pedidos',     label: 'Pedidos / Compras' },
-  { key: 'proveedores', label: 'Proveedores' },
-  { key: 'inventario',  label: 'Inventario' },
-  { key: 'produccion',  label: 'Producción' },
-  { key: 'usuarios',    label: 'Usuarios' },
-  { key: 'ajustes',     label: 'Ajustes' },
-];
-
-const empty: ModulePermission = { lectura: false, escritura: false, full: false };
-
-function defaultsFor(role: RoleKey): RolePermisos {
-  const all: RolePermisos = MODULES.reduce<RolePermisos>((acc, m) => {
-    acc[m.key] = { ...empty };
-    return acc;
-  }, {} as RolePermisos);
-
-  if (role === 'admin') {
-    MODULES.forEach((m) => (all[m.key] = { lectura: true, escritura: true, full: true }));
-  } else if (role === 'analista') {
-    (['dashboard', 'pedidos', 'proveedores', 'inventario', 'produccion', 'ajustes'] as ModuleKey[]).forEach((k) => {
-      all[k] = { lectura: true, escritura: true, full: false };
-    });
-    all.usuarios = { lectura: true, escritura: false, full: false };
-  } else if (role === 'obrero') {
-    all.dashboard  = { lectura: true, escritura: false, full: false };
-    all.pedidos    = { lectura: true, escritura: true, full: false };
-    all.inventario = { lectura: true, escritura: true, full: false };
-    all.produccion = { lectura: true, escritura: false, full: false };
-    all.ajustes    = { lectura: true, escritura: false, full: false };
-  } else {
-    all.dashboard = { lectura: true, escritura: false, full: false };
-  }
-  return all;
-}
 
 function normalize(stored: Partial<AllPermisos>, roles: CustomRole[]): AllPermisos {
   return roles.reduce<AllPermisos>((acc, r) => {
@@ -76,14 +43,13 @@ type ModalState =
   | { kind: 'gestionar' }
   | { kind: 'eliminar'; role: CustomRole };
 
-export function RolesPermisosPanel() {
+export function RolesPermisosPanel({ readOnly = false, onRolesChanged }: { readOnly?: boolean; onRolesChanged?: () => void } = {}) {
   const { user } = useSession();
   const [roles, setRoles] = useState<CustomRole[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [permisos, setPermisos] = useState<AllPermisos>({} as AllPermisos);
-  const [dirty, setDirty] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [autoEstado, setAutoEstado] = useState<'idle' | 'guardando' | 'guardado' | 'error'>('idle');
   const [modal, setModal] = useState<ModalState>({ kind: 'none' });
 
   async function refresh() {
@@ -119,8 +85,14 @@ export function RolesPermisosPanel() {
     return () => { cancelled = true; };
   }, []);
 
+  // Recarga la matriz y avisa al padre (para que el dropdown de "crear usuario"
+  // y otros listados de roles se actualicen automáticamente tras un cambio).
+  async function reload() {
+    await refresh();
+    onRolesChanged?.();
+  }
+
   function togglePerm(role: RoleKey, mod: ModuleKey, field: keyof ModulePermission) {
-    setDirty(true);
     setPermisos((prev) => {
       const current = prev[role]?.[mod] ?? { ...empty };
       const next: ModulePermission = { ...current, [field]: !current[field] };
@@ -131,30 +103,30 @@ export function RolesPermisosPanel() {
       if ((field === 'lectura' || field === 'escritura') && !next[field]) {
         next.full = false;
       }
-      return {
-        ...prev,
-        [role]: { ...prev[role], [mod]: next },
-      };
+      const nextRole = normalizeRolePermisos({ ...prev[role], [mod]: next });
+      // Autoguardado: persiste de inmediato los permisos de ESE rol (no depende
+      // del botón "Guardar", para que no se pierdan al cambiar de vista).
+      void persistirRol(role, nextRole);
+      return { ...prev, [role]: nextRole };
     });
   }
 
-  function resetRol(role: RoleKey) {
-    setDirty(true);
-    setPermisos((prev) => ({ ...prev, [role]: defaultsFor(role) }));
-    toast(`Permisos del rol "${role}" reseteados al valor por defecto`, 'info');
+  async function persistirRol(role: RoleKey, rolePermisos: RolePermisos) {
+    setAutoEstado('guardando');
+    try {
+      await savePermisosRole(role, rolePermisos, user?.email ?? 'sistema');
+      setAutoEstado('guardado');
+    } catch (e) {
+      setAutoEstado('error');
+      toast(e instanceof Error ? e.message : 'No se pudo guardar el permiso', 'error');
+    }
   }
 
-  async function guardar() {
-    setSaving(true);
-    try {
-      await savePermisos(permisos, user?.email ?? 'sistema');
-      notify('Matriz de roles y permisos guardada', 'success', { link: '#/app/usuarios' });
-      setDirty(false);
-    } catch (e) {
-      toast(e instanceof Error ? e.message : 'No se pudo guardar', 'error');
-    } finally {
-      setSaving(false);
-    }
+  function resetRol(role: RoleKey) {
+    const def = defaultsFor(role);
+    setPermisos((prev) => ({ ...prev, [role]: def }));
+    void persistirRol(role, def); // autoguardado
+    toast(`Permisos del rol "${role}" reseteados al valor por defecto`, 'info');
   }
 
   async function handleEliminarRol(role: CustomRole) {
@@ -163,7 +135,7 @@ export function RolesPermisosPanel() {
       try { await eliminarPermisosRol(role.key); } catch { /* opcional */ }
       notify(`Rol eliminado: ${role.label}`, 'success', { link: '#/app/usuarios' });
       setModal({ kind: 'none' });
-      await refresh();
+      await reload();
     } catch (e) {
       toast(e instanceof Error ? e.message : 'No se pudo eliminar', 'error');
     }
@@ -179,15 +151,24 @@ export function RolesPermisosPanel() {
             nuevos y eliminar los que no tengan usuarios asignados.
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '.5rem', flexWrap: 'wrap' }}>
-          <button className="btn btn-ghost" onClick={() => setModal({ kind: 'gestionar' })} title="Editar nombre, descripción o color de roles">
-            ⚙ Gestionar
-          </button>
-          <button className="btn btn-ghost" onClick={() => setModal({ kind: 'crear' })}>+ Nuevo rol</button>
-          <button className="btn btn-primary" onClick={guardar} disabled={!dirty || saving || loading}>
-            {saving ? 'Guardando…' : 'Guardar'}
-          </button>
-        </div>
+        {!readOnly && (
+          <div style={{ display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+            <span
+              className="muted"
+              style={{ fontSize: '.8rem', color: autoEstado === 'error' ? 'var(--danger)' : autoEstado === 'guardado' ? 'var(--success)' : undefined }}
+              aria-live="polite"
+            >
+              {autoEstado === 'guardando' ? '⏳ Guardando…'
+                : autoEstado === 'guardado' ? '✓ Guardado automáticamente'
+                : autoEstado === 'error' ? '⚠ Error al guardar'
+                : '💾 Los cambios se guardan automáticamente'}
+            </span>
+            <button className="btn btn-ghost" onClick={() => setModal({ kind: 'gestionar' })} title="Editar nombre, descripción o color de roles">
+              ⚙ Gestionar
+            </button>
+            <button className="btn btn-ghost" onClick={() => setModal({ kind: 'crear' })}>+ Nuevo rol</button>
+          </div>
+        )}
       </div>
 
       {loading ? (
@@ -221,26 +202,28 @@ export function RolesPermisosPanel() {
                       {enUso === 0 ? 'Sin usuarios asignados' : `${enUso} usuario(s) asignado(s)`}
                     </p>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '.25rem' }}>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-ghost"
-                      onClick={() => resetRol(rc.key)}
-                      title="Resetear este rol a los valores por defecto"
-                    >
-                      ↺ Default
-                    </button>
-                    {!rc.sistema && enUso === 0 && (
+                  {!readOnly && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '.25rem' }}>
                       <button
                         type="button"
-                        className="btn btn-sm btn-danger"
-                        onClick={() => setModal({ kind: 'eliminar', role: rc })}
-                        title="Eliminar este rol"
+                        className="btn btn-sm btn-ghost"
+                        onClick={() => resetRol(rc.key)}
+                        title="Resetear este rol a los valores por defecto"
                       >
-                        🗑 Eliminar
+                        ↺ Default
                       </button>
-                    )}
-                  </div>
+                      {!rc.sistema && enUso === 0 && (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-danger"
+                          onClick={() => setModal({ kind: 'eliminar', role: rc })}
+                          title="Eliminar este rol"
+                        >
+                          🗑 Eliminar
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <table className="table" style={{ fontSize: '.82rem' }}>
@@ -259,13 +242,13 @@ export function RolesPermisosPanel() {
                         <tr key={m.key}>
                           <td><strong>{m.label}</strong></td>
                           <td style={{ textAlign: 'center' }}>
-                            <input type="checkbox" checked={p.lectura} onChange={() => togglePerm(rc.key, m.key, 'lectura')} aria-label={`Lectura ${m.label} para ${rc.label}`} />
+                            <input type="checkbox" disabled={readOnly} checked={p.lectura} onChange={() => togglePerm(rc.key, m.key, 'lectura')} aria-label={`Lectura ${m.label} para ${rc.label}`} />
                           </td>
                           <td style={{ textAlign: 'center' }}>
-                            <input type="checkbox" checked={p.escritura} onChange={() => togglePerm(rc.key, m.key, 'escritura')} aria-label={`Escritura ${m.label} para ${rc.label}`} />
+                            <input type="checkbox" disabled={readOnly} checked={p.escritura} onChange={() => togglePerm(rc.key, m.key, 'escritura')} aria-label={`Escritura ${m.label} para ${rc.label}`} />
                           </td>
                           <td style={{ textAlign: 'center' }}>
-                            <input type="checkbox" checked={p.full} onChange={() => togglePerm(rc.key, m.key, 'full')} aria-label={`Full control ${m.label} para ${rc.label}`} />
+                            <input type="checkbox" disabled={readOnly} checked={p.full} onChange={() => togglePerm(rc.key, m.key, 'full')} aria-label={`Full control ${m.label} para ${rc.label}`} />
                           </td>
                         </tr>
                       );
@@ -283,10 +266,13 @@ export function RolesPermisosPanel() {
           actorEmail={user?.email ?? undefined}
           onClose={() => setModal({ kind: 'none' })}
           onCreated={async (creado) => {
-            setPermisos((prev) => ({ ...prev, [creado.key]: defaultsFor(creado.key) }));
-            setDirty(true);
+            const def = defaultsFor(creado.key);
+            setPermisos((prev) => ({ ...prev, [creado.key]: def }));
+            // Persiste la fila del nuevo rol de inmediato (autoguardado) para que
+            // no se pierda al refrescar la matriz.
+            await persistirRol(creado.key, def);
             setModal({ kind: 'none' });
-            await refresh();
+            await reload();
           }}
         />
       )}
@@ -297,7 +283,7 @@ export function RolesPermisosPanel() {
           conteoUso={counts}
           actorEmail={user?.email ?? undefined}
           onClose={() => setModal({ kind: 'none' })}
-          onCambioAplicado={refresh}
+          onCambioAplicado={reload}
         />
       )}
 
