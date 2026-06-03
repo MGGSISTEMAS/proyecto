@@ -9,6 +9,7 @@ import { useSession } from '@/modules/auth/authStore';
 import { usePermissions } from '@/modules/auth/PermissionsContext';
 import type { Almacen, Existencia, Orden, Producto } from '@/shared/lib/types';
 import {
+  addCategoria,
   contarProductosPorCategoria,
   createProducto,
   eliminarCategoria,
@@ -40,6 +41,7 @@ import { ImportarExcelModal } from './ImportarExcelModal';
 import { analizarExcel, descargarPlantillaExcel, type AnalisisImport } from './inventarioBulk';
 import { InventarioFilterbar, type FilterValues } from './InventarioFilterbar';
 import { AlmacenesView, type AlmacenLayout } from './AlmacenesView';
+import { ConsumoChartModal } from '@/shared/ui/ConsumoChartModal';
 import { AlmacenKanban } from './AlmacenKanban';
 import { descargarAlmacenExcel, descargarAlmacenPdf } from './almacenExport';
 import { AlmacenForm } from './AlmacenForm';
@@ -49,6 +51,7 @@ import {
   agruparValores,
   movStatsDeAlmacen,
   consumoDeAlmacen,
+  consumoPorProductoEnAlmacen,
   crearAlmacen,
   actualizarAlmacen,
   eliminarAlmacen,
@@ -112,6 +115,7 @@ export function InventarioPage() {
   const [almacenes, setAlmacenes] = useState<Almacen[]>([]);
   const [existencias, setExistencias] = useState<Existencia[]>([]);
   const [almacenSel, setAlmacenSel] = useState<string | null>(null);
+  const [consumoAlmacen, setConsumoAlmacen] = useState<string | null>(null);
   const [movStats, setMovStats] = useState<Map<string, { entradas: number; salidas: number }>>(new Map());
   const [consumo, setConsumo] = useState<Map<string, ConsumoProducto>>(new Map());
   const [detalleLayout, setDetalleLayout] = useState<'kanban' | 'lista'>('lista');
@@ -535,6 +539,7 @@ export function InventarioPage() {
               <h2 style={{ margin: 0 }}>▣ {almacenSel}</h2>
               <span className="muted mono">{money(valoresAlm[almacenSel]?.valor ?? 0)} · {num(almacenRows.length)} producto(s)</span>
               <div style={{ display: 'flex', gap: '.4rem', marginLeft: 'auto' }}>
+                <button className="btn btn-primary btn-sm" onClick={() => setConsumoAlmacen(almacenSel)} title="Gráfica de consumo por producto de este almacén">📊 Consumo</button>
                 <button className="btn btn-ghost btn-sm" disabled={!almacenRows.length}
                   onClick={() => descargarAlmacenExcel(almacenSel, almacenRows).catch((e) => toast(e instanceof Error ? e.message : 'No se pudo generar el Excel', 'error'))}>↓ Excel</button>
                 <button className="btn btn-ghost btn-sm" disabled={!almacenRows.length}
@@ -594,8 +599,20 @@ export function InventarioPage() {
                 layout={ui.almacenLayout}
                 canWrite={canWrite}
                 onSelect={setAlmacenSel}
+                onConsumo={setConsumoAlmacen}
                 onEditar={(a) => setModal({ kind: 'almacenEditar', almacen: a })}
                 onEliminar={(a) => setModal({ kind: 'almacenEliminar', almacen: a })}
+              />
+            )}
+            {consumoAlmacen && (
+              <ConsumoChartModal
+                title={`Consumo · ${consumoAlmacen}`}
+                subtitle="Consumo de productos de este almacén (salidas y consumo de fundición). La gráfica muestra cada producto; el valor en $ usa el costo del movimiento."
+                cargar={async (desde, hasta) => {
+                  const items = await consumoPorProductoEnAlmacen(consumoAlmacen!, desde, hasta);
+                  return items.map((x) => ({ id: x.producto_id, label: x.nombre, sub: x.sku, unidad: x.unidad, cantidad: x.cantidad, valor: x.valor }));
+                }}
+                onClose={() => setConsumoAlmacen(null)}
               />
             )}
           </>
@@ -708,6 +725,7 @@ export function InventarioPage() {
           entidadLabel="producto"
           onRenombrar={(o, n) => renombrarCategoria(o, n, productoActor)}
           onEliminar={(n) => eliminarCategoria(n)}
+          onAgregar={(n) => addCategoria(n, productoActor)}
           onCambioAplicado={async () => {
             await reload();
             const cs = await getCategorias(productos);
