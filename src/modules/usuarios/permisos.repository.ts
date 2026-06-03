@@ -28,7 +28,7 @@ export const MODULES: { key: ModuleKey; label: string }[] = [
   { key: 'pedidos',     label: 'Pedidos / Compras' },
   { key: 'proveedores', label: 'Proveedores' },
   { key: 'inventario',  label: 'Inventario' },
-  { key: 'produccion',  label: 'Producción' },
+  { key: 'produccion',  label: 'Fundición' },
   { key: 'salidas',     label: 'Salidas / Traslados' },
   { key: 'combustible', label: 'Combustible' },
   { key: 'tesoreria',   label: 'Tesorería' },

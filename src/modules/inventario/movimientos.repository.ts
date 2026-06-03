@@ -110,7 +110,7 @@ export async function recomputeProductoAgg(productoId: string): Promise<void> {
  * No es atómico (ver nota de transaccionalidad arriba).
  */
 export async function registrarMovimiento(input: MovimientoInput): Promise<Movimiento> {
-  // El almacén suele venir explícito (producción, recepción, transferencia); en
+  // El almacén suele venir explícito (fundición, recepción, transferencia); en
   // ese caso evitamos el round-trip a `productos` y resolvemos sólo el fallback.
   let almacen = (input.almacen || '').trim();
   if (!almacen) {

@@ -9,7 +9,7 @@ import { crearHorno } from './hornos.repository';
 
 interface RecetaBase {
   rendimiento: number;
-  /** Nº de la receta base (última producción del producto). */
+  /** Nº de la receta base (última fundición del producto). */
   numero: number;
   items: Record<string, { cantidad: number; almacen: string }>;
 }
@@ -78,7 +78,7 @@ export function MaterialAProducirModal({
   const setRow = (id: string, patch: Partial<MatRow>) =>
     setRows((prev) => ({ ...prev, [id]: { ...(prev[id] ?? { checked: false, cantidad: '1', almacen: almacenes[0] }), ...patch } }));
 
-  // Receta del producto existente: insumos usados en su última producción.
+  // Receta del producto existente: insumos usados en su última fundición.
   const [recetaBase, setRecetaBase] = useState<RecetaBase | null>(null);
   const [recetaLoading, setRecetaLoading] = useState(false);
   const prevRecetaIds = useRef<string[]>([]);
@@ -117,11 +117,11 @@ export function MaterialAProducirModal({
 
   const cantidadNum = Number(cantidad) || 0;
   const productoSel = producibles.find((p) => p.id === productoSelId) ?? null;
-  // Nº de receta que tendrá ESTA producción (la última + 1; o 1 si no hay previa / es nuevo).
+  // Nº de receta que tendrá ESTA fundición (la última + 1; o 1 si no hay previa / es nuevo).
   const recetaNumActual = modoOutput === 'nuevo' ? 1 : (recetaBase ? recetaBase.numero + 1 : 1);
 
   // Al elegir un producto EXISTENTE, cargar su receta (insumos de la última
-  // producción). En modo "nuevo" no hay receta previa.
+  // fundición). En modo "nuevo" no hay receta previa.
   useEffect(() => {
     if (modoOutput !== 'existente' || !productoSelId) { setRecetaBase(null); return; }
     let cancel = false;
@@ -170,7 +170,7 @@ export function MaterialAProducirModal({
   }, [recetaBase, cantidadNum]);
 
   // Costos: CTM → CP → costo unitario. El posible precio de venta se MARCA solo
-  // = costo unitario de producción (no editable por el usuario).
+  // = costo unitario de fundición (no editable por el usuario).
   const seleccion = materiales
     .map((m) => ({ m, row: rows[m.id] }))
     .filter((x) => x.row?.checked && (Number(x.row.cantidad) || 0) > 0);
@@ -282,7 +282,7 @@ export function MaterialAProducirModal({
       onCreated();
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'No se pudo iniciar la producción.');
+      setError(err instanceof Error ? err.message : 'No se pudo iniciar la fundición.');
     } finally {
       setSaving(false);
     }
@@ -292,7 +292,7 @@ export function MaterialAProducirModal({
     <>
       <button type="button" className="btn btn-ghost" onClick={onClose} disabled={saving}>Cancelar</button>
       <button type="submit" form="prod-form" className="btn btn-primary" disabled={saving}>
-        {saving ? 'Iniciando…' : 'Iniciar producción'}
+        {saving ? 'Iniciando…' : 'Iniciar fundición'}
       </button>
     </>
   );

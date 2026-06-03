@@ -9,7 +9,7 @@ interface EnviarResult {
 }
 
 /**
- * Genera el PDF de producción en el navegador y lo envía vía la Edge Function
+ * Genera el PDF de fundición en el navegador y lo envía vía la Edge Function
  * `enviar-produccion` (Brevo). Mismo patrón que la trazabilidad de compras.
  */
 export async function enviarProduccionPorCorreo(produccionId: string, toEmail?: string): Promise<EnviarResult> {
@@ -25,7 +25,7 @@ export async function enviarProduccionPorCorreo(produccionId: string, toEmail?: 
 }
 
 /**
- * Envía el reporte de producción a varios correos. Genera el PDF una sola vez y
+ * Envía el reporte de fundición a varios correos. Genera el PDF una sola vez y
  * reusa el base64 para cada destinatario. Mismo patrón que la trazabilidad de compras.
  */
 export async function enviarProduccionAMultiples(

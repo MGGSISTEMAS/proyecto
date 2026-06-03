@@ -167,7 +167,7 @@ export function ProductoForm({ producto, productos = [], onClose, onSubmit }: Pr
       estado: form.estado,
       restock_pct: restockRaw === '' ? null : Math.max(0, Number(restockRaw)),
       receta_fundicion: form.esReceta && form.receta_fundicion ? (form.receta_fundicion as RecetaFundicion) : null,
-      // Marcar receta no se des-marca al editar (lo añade el toggle o el alta desde producción).
+      // Marcar receta no se des-marca al editar (lo añade el toggle o el alta desde fundición).
       es_receta: form.esReceta || (producto?.es_receta ?? false),
       es_producible: producto?.es_producible ?? false,
     };
@@ -419,7 +419,7 @@ export function ProductoForm({ producto, productos = [], onClose, onSubmit }: Pr
               step="0.01"
               value={form.precio_venta}
               onChange={(e) => update('precio_venta', e.target.value)}
-              placeholder="para calcular ganancia en producción"
+              placeholder="para calcular ganancia en fundición"
             />
             <small className="muted" style={{ fontSize: '.72rem' }}>
               Se usa para estimar la posible ganancia cuando el producto se produce.

@@ -58,7 +58,7 @@ export function ProduccionPage() {
       setAlmacenes(alms);
       setHornos(hrns);
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'No se pudo cargar producción', 'error');
+      toast(e instanceof Error ? e.message : 'No se pudo cargar fundición', 'error');
     } finally {
       setLoading(false);
     }
@@ -85,7 +85,7 @@ export function ProduccionPage() {
   async function handleFinalizar(prod: Produccion) {
     try {
       await finalizarProduccion(prod.id, actor, actorName);
-      notify(`Producción finalizada: ${prod.producto_nombre} (${num(prod.cantidad)} und) → entró a ${prod.almacen_destino}`, 'success', { link: '#/app/inventario' });
+      notify(`Fundición finalizada: ${prod.producto_nombre} (${num(prod.cantidad)} und) → entró a ${prod.almacen_destino}`, 'success', { link: '#/app/inventario' });
       await reload();
     } catch (e) {
       toast(e instanceof Error ? e.message : 'No se pudo finalizar', 'error');
@@ -98,11 +98,11 @@ export function ProduccionPage() {
     <div>
       <div className="page-head">
         <div>
-          <h1>Producción</h1>
-          <p className="muted">Órdenes de producción: consumen insumos del inventario y, al finalizar, el producto terminado entra como existencia.</p>
+          <h1>Fundición</h1>
+          <p className="muted">Órdenes de fundición: consumen insumos del inventario y, al finalizar, el producto terminado entra como existencia.</p>
         </div>
         <div className="actions">
-          <div className="view-toggle" role="tablist" aria-label="Vista de producción">
+          <div className="view-toggle" role="tablist" aria-label="Vista de fundición">
             <button className={layout === 'kanban' ? 'active' : ''} onClick={() => setLayout('kanban')}>▦ Kanban</button>
             <button className={layout === 'lista' ? 'active' : ''} onClick={() => setLayout('lista')}>☰ Lista</button>
           </div>
@@ -128,7 +128,7 @@ export function ProduccionPage() {
           />
           <select className="input" value={filtroEstado} onChange={(e) => setFiltroEstado(e.target.value as typeof filtroEstado)} style={{ flex: '0 0 auto' }}>
             <option value="todos">Todos los estados</option>
-            <option value="produccion">En producción</option>
+            <option value="produccion">En fundición</option>
             <option value="finalizado">Finalizados</option>
           </select>
           {(busqueda || filtroEstado !== 'todos') && (
@@ -141,14 +141,14 @@ export function ProduccionPage() {
       )}
 
       {loading ? (
-        <EmptyState message="Cargando producción…" icon="◔" />
+        <EmptyState message="Cargando fundición…" icon="◔" />
       ) : layout === 'kanban' ? (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem' }}>
-          {/* En producción */}
+          {/* En fundición */}
           <div>
-            <div className="sidebar-section" style={{ paddingLeft: 0 }}>Productos en producción · {num(enProduccion.length)}</div>
+            <div className="sidebar-section" style={{ paddingLeft: 0 }}>Productos en fundición · {num(enProduccion.length)}</div>
             {!enProduccion.length ? (
-              <div className="card"><EmptyState message="Nada en producción." icon="🔥" /></div>
+              <div className="card"><EmptyState message="Nada en fundición." icon="🔥" /></div>
             ) : (
               <div style={{ display: 'grid', gap: '.75rem' }}>
                 {enProduccion.map((p) => (
@@ -162,7 +162,7 @@ export function ProduccionPage() {
                     <div className="muted" style={{ fontSize: '.75rem' }}>Inicio: {dateTime(p.inicio_at)} · destino {p.almacen_destino}</div>
                     <div style={{ display: 'flex', gap: '.4rem', marginTop: '.6rem', flexWrap: 'wrap' }}>
                       <button className="btn btn-sm btn-ghost" onClick={() => setModal({ kind: 'ver', id: p.id })}>Ver</button>
-                      {canWrite && <button className="btn btn-sm btn-primary" onClick={() => setModal({ kind: 'finalizar', prod: p })}>✓ Finalizar producción</button>}
+                      {canWrite && <button className="btn btn-sm btn-primary" onClick={() => setModal({ kind: 'finalizar', prod: p })}>✓ Finalizar fundición</button>}
                     </div>
                   </div>
                 ))}
@@ -223,7 +223,7 @@ export function ProduccionPage() {
                 <tr key={p.id}>
                   <td><strong>{p.producto_nombre}</strong></td>
                   <td>{p.receta_num != null ? <span className="badge">#{num(p.receta_num)}</span> : '—'}</td>
-                  <td><span className={`badge ${p.estado === 'finalizado' ? 'success' : 'warning'}`}>{p.estado === 'finalizado' ? 'Finalizado' : 'En producción'}</span></td>
+                  <td><span className={`badge ${p.estado === 'finalizado' ? 'success' : 'warning'}`}>{p.estado === 'finalizado' ? 'Finalizado' : 'En fundición'}</span></td>
                   <td className="mono" style={{ textAlign: 'right' }}>{num(p.cantidad)}</td>
                   <td className="muted" style={{ fontSize: '.8rem' }}>{dateTime(p.inicio_at)}</td>
                   <td className="muted" style={{ fontSize: '.8rem' }}>{p.fin_at ? dateTime(p.fin_at) : '—'}</td>
@@ -282,7 +282,7 @@ export function ProduccionPage() {
       )}
       {modal.kind === 'finalizar' && (
         <ConfirmDialog
-          title="Finalizar producción"
+          title="Finalizar fundición"
           message={`Se registrará la entrada de ${num(modal.prod.cantidad)} und de "${modal.prod.producto_nombre}" en ${modal.prod.almacen_destino} a costo ${money(modal.prod.costo_unitario)}/und. ¿Continuar?`}
           confirmText="Finalizar"
           onCancel={() => setModal({ kind: 'none' })}

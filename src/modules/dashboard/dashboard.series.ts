@@ -136,11 +136,11 @@ export async function getSerieValorInventario(rango: RangoFechas): Promise<Serie
 }
 
 /**
- * Serie de producción: lee las órdenes de producción FINALIZADAS desde la tabla
+ * Serie de fundición: lee las órdenes de fundición FINALIZADAS desde la tabla
  * `produccion` (por su fecha de finalización) y acumula por bucket:
  *  - count = unidades producidas (Σ cantidad)
  *  - value = valor producido (Σ cantidad × costo_unitario)
- * Antes dependía de movimientos `fin_fundicion` (que el módulo de producción
+ * Antes dependía de movimientos `fin_fundicion` (que el módulo de fundición
  * actual ya no genera), por eso la gráfica no se actualizaba.
  */
 export async function getSerieProduccion(rango: RangoFechas): Promise<SeriePoint[]> {

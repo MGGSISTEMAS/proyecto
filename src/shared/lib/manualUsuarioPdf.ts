@@ -95,7 +95,7 @@ const SECCIONES: Seccion[] = [
     intro:
       'Aquí se gestiona todo el ciclo de compra: desde que se pide un material hasta que se recibe. También deja un registro ordenado (trazabilidad) de cada paso.',
     puntos: [
-      'Orden de pedido: es la solicitud interna de lo que se necesita. Al crearla se indica su clasificación: Producción, Bienes o Servicios.',
+      'Orden de pedido: es la solicitud interna de lo que se necesita. Al crearla se indica su clasificación: Fundición, Bienes o Servicios.',
       'Realizar OC (Orden de Compra): convierte el pedido en una compra a un proveedor. Antes de emitirla se eligen los documentos que la acompañan: Nota de entrega y/o Nota de despacho.',
       'Recepción: cuando llega la mercadería se registra la entrada, y el inventario se actualiza solo con su costo.',
       'Trazabilidad: cada orden tiene una línea de tiempo con todo lo que ocurrió (creación, emisión, documentos, recepción, etc.).',
@@ -118,15 +118,15 @@ const SECCIONES: Seccion[] = [
   },
   {
     icono: '🔥',
-    titulo: 'Producción',
+    titulo: 'Fundición',
     captura: 'produccion',
     intro:
       'Gestiona la fabricación o fundición de productos a partir de materiales del inventario, usando "recetas" que indican qué insumos y en qué cantidad se necesitan.',
     puntos: [
       'Recetas: definen los materiales que consume cada producto que se fabrica; al producir, el sistema descuenta esos insumos del inventario.',
       'Vista kanban: muestra las producciones en proceso y las últimas finalizadas.',
-      'Cada producción registra el horno utilizado y la cantidad producida.',
-      'Se puede descargar la receta/producción en Excel, con el encabezado naranja característico del sistema.',
+      'Cada fundición registra el horno utilizado y la cantidad producida.',
+      'Se puede descargar la receta/fundición en Excel, con el encabezado naranja característico del sistema.',
     ],
   },
   {

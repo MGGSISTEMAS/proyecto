@@ -1,7 +1,7 @@
 /* ============================================================
-   MGG · Producción / Receta · Export a Excel
+   MGG · Fundición / Receta · Export a Excel
    Genera un .xlsx con los materiales usados y el resumen de
-   costos de una producción (= receta para X unidades).
+   costos de una fundición (= receta para X unidades).
    ============================================================ */
 import { getProduccionConMateriales } from './produccion.repository';
 
@@ -30,7 +30,7 @@ const HEADER_STYLE = {
 
 export async function descargarProduccionExcel(id: string): Promise<void> {
   const prod = await getProduccionConMateriales(id);
-  if (!prod) throw new Error('Producción no encontrada');
+  if (!prod) throw new Error('Fundición no encontrada');
   const [XLSXmod, { dateTime }] = await Promise.all([
     import('xlsx-js-style'),
     import('@/shared/lib/format'),
@@ -48,13 +48,13 @@ export async function descargarProduccionExcel(id: string): Promise<void> {
   const cp = prod.costo_material + prod.mano_obra + prod.costos_indirectos;
 
   const encabezado: (string | number)[][] = [
-    ['RECETA / PRODUCCIÓN · MGG'],
+    ['RECETA / FUNDICIÓN · MGG'],
     ['Producto', prod.producto_nombre],
     ['Cantidad producida (und)', prod.cantidad],
     ['Almacén destino', prod.almacen_destino],
     ['Horno utilizado', prod.horno || '—'],
     ['Receta N°', prod.receta_num != null ? `#${prod.receta_num}` : '—'],
-    ['Estado', prod.estado === 'finalizado' ? 'Finalizado' : 'En producción'],
+    ['Estado', prod.estado === 'finalizado' ? 'Finalizado' : 'En fundición'],
     ['Inicio', dateTime(prod.inicio_at)],
     ['Fin', prod.fin_at ? dateTime(prod.fin_at) : '—'],
     [],
@@ -72,7 +72,7 @@ export async function descargarProduccionExcel(id: string): Promise<void> {
     ['Costo Total de Materiales (CTM)', prod.costo_material],
     ['Mano de obra', prod.mano_obra],
     ['Costos indirectos', prod.costos_indirectos],
-    ['Costo de Producción (CP)', cp],
+    ['Costo de Fundición (CP)', cp],
     ['Costo unitario (PMP)', prod.costo_unitario],
     ['Precio de venta', prod.precio_venta ?? '—'],
     ['Posible ganancia', prod.ganancia ?? '—'],

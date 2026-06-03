@@ -297,7 +297,7 @@ export async function aplicarImportacion(analisis: AnalisisImport): Promise<Impo
     const restockPct = Number.isFinite(restockNum) ? restockNum : null;
     // No forzar mayúsculas: los nombres de almacén deben respetar la forma
     // canónica de la tabla `almacenes` (ej. "General", "Almacén 1") para que
-    // coincidan con las existencias y la vista de producción.
+    // coincidan con las existencias y la vista de fundición.
     const almacen = toStr(r.almacen).trim() || 'General';
 
     preparadas.push({
@@ -386,7 +386,7 @@ function buildInstruccionesSheet(XLSX: XlsxModule): WsSheet {
     ['• almacen (texto): opcional. Por defecto "GENERAL". Define en qué almacén entra el stock.'],
     ['• estado (texto): "activo" o "inactivo". Vacío se interpreta como "activo".'],
     ['• restock_pct (número 0–100): opcional. % de reabastecimiento para las alertas de stock.'],
-    ['• es_receta (SI/NO): opcional. Marca el producto como insumo de receta (producción).'],
+    ['• es_receta (SI/NO): opcional. Marca el producto como insumo de receta (fundición).'],
     ['• es_producible (SI/NO): opcional. Marca el producto como producible (producto terminado).'],
     [''],
     ['3. VALIDACIONES QUE EL SISTEMA APLICA'],

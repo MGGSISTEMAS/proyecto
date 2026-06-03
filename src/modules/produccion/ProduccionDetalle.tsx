@@ -22,7 +22,7 @@ export function duracionProd(inicio: string, fin?: string | null): string {
 export function ProduccionDetalle({
   id,
   defaultEmail = '',
-  titulo = 'Detalle de producción',
+  titulo = 'Detalle de fundición',
   onEditar,
   onClose,
 }: {
@@ -75,7 +75,7 @@ export function ProduccionDetalle({
       {loading ? (
         <EmptyState message="Cargando…" icon="◔" />
       ) : !prod ? (
-        <EmptyState message="No se encontró la producción." icon="✕" />
+        <EmptyState message="No se encontró la fundición." icon="✕" />
       ) : (
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginBottom: '.75rem' }}>
@@ -87,7 +87,7 @@ export function ProduccionDetalle({
               <div className="muted mono" style={{ fontSize: '.78rem' }}>
                 {num(prod.cantidad)} und · almacén {prod.almacen_destino}
                 {prod.horno ? ` · horno ${prod.horno}` : ''} ·{' '}
-                <span className={`badge ${prod.estado === 'finalizado' ? 'success' : 'warning'}`}>{prod.estado === 'finalizado' ? 'Finalizado' : 'En producción'}</span>
+                <span className={`badge ${prod.estado === 'finalizado' ? 'success' : 'warning'}`}>{prod.estado === 'finalizado' ? 'Finalizado' : 'En fundición'}</span>
               </div>
             </div>
             <div className="muted mono" style={{ fontSize: '.78rem', textAlign: 'right' }}>
@@ -126,7 +126,7 @@ export function ProduccionDetalle({
             <div className="mono" style={{ fontSize: '.85rem', lineHeight: 1.7 }}>
               Costo Total de Materiales (CTM): <strong>{money(prod.costo_material)}</strong><br />
               Mano de obra: {money(prod.mano_obra)} · Costos indirectos: {money(prod.costos_indirectos)}<br />
-              Costo de Producción (CP): <strong>{money(cp)}</strong><br />
+              Costo de Fundición (CP): <strong>{money(cp)}</strong><br />
               Costo unitario (PMP): <strong style={{ color: 'var(--primary-3)' }}>{money(prod.costo_unitario)}</strong><br />
               Precio de venta: {prod.precio_venta != null ? money(prod.precio_venta) : '—'}
               {prod.ganancia != null && (
@@ -189,7 +189,7 @@ function EnviarProduccionModal({
         const detalle = fallidos.map((f) => `${f.email} (${f.motivo})`).join(' · ');
         notify(`Enviado a ${enviados.join(', ')}. Falló: ${detalle}`, 'warning');
       } else {
-        notify(`Reporte de producción enviado a ${enviados.join(', ')}`, 'success');
+        notify(`Reporte de fundición enviado a ${enviados.join(', ')}`, 'success');
       }
       onClose();
     } catch (e) {
@@ -214,7 +214,7 @@ function EnviarProduccionModal({
       }
     >
       <p className="muted" style={{ marginTop: 0, fontSize: '.88rem' }}>
-        Se enviará el PDF del reporte de producción a los destinatarios seleccionados.
+        Se enviará el PDF del reporte de fundición a los destinatarios seleccionados.
       </p>
 
       <label

@@ -1,6 +1,6 @@
 /* ============================================================
-   MGG · Producción · Reporte PDF
-   Genera el PDF del proceso de producción (materiales, costos,
+   MGG · Fundición · Reporte PDF
+   Genera el PDF del proceso de fundición (materiales, costos,
    PMP y posible ganancia). Devuelve base64 para enviarlo por correo.
    ============================================================ */
 import type { Produccion } from '@/shared/lib/types';
@@ -21,7 +21,7 @@ async function construir(prod: Produccion) {
   if (logo) { try { doc.addImage(logo, 'JPEG', MARGIN, y, 46, 46); } catch { /* opcional */ } }
   const tx = logo ? MARGIN + 60 : MARGIN;
   doc.setFont('helvetica', 'bold'); doc.setFontSize(15);
-  doc.text('Reporte de Producción', tx, y + 18);
+  doc.text('Reporte de Fundición', tx, y + 18);
   doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
   doc.text(`MGG · ${dateTime(new Date().toISOString())}`, tx, y + 33);
   y += 60;
@@ -32,7 +32,7 @@ async function construir(prod: Produccion) {
   const dur = duracion(prod.inicio_at, prod.fin_at);
   const ficha: Array<[string, string]> = [
     ['Receta N°', prod.receta_num != null ? `#${num(prod.receta_num)}` : '—'],
-    ['Estado', prod.estado === 'finalizado' ? 'Finalizado' : 'En producción'],
+    ['Estado', prod.estado === 'finalizado' ? 'Finalizado' : 'En fundición'],
     ['Almacén destino', prod.almacen_destino],
     ['Horno utilizado', prod.horno || '—'],
     ['Inicio', dateTime(prod.inicio_at)],
@@ -68,7 +68,7 @@ async function construir(prod: Produccion) {
     ['Costo Total de Materiales (CTM)', money(prod.costo_material)],
     ['Mano de obra', money(prod.mano_obra)],
     ['Costos indirectos', money(prod.costos_indirectos)],
-    ['Costo de Producción (CP)', money(prod.costo_material + prod.mano_obra + prod.costos_indirectos)],
+    ['Costo de Fundición (CP)', money(prod.costo_material + prod.mano_obra + prod.costos_indirectos)],
     ['Costo unitario (PMP)', money(prod.costo_unitario)],
     ['Precio de venta', prod.precio_venta != null ? money(prod.precio_venta) : '—'],
     ['Posible ganancia', prod.ganancia != null ? money(prod.ganancia) : '—'],
@@ -97,14 +97,14 @@ function duracion(inicio: string, fin?: string | null): string {
 
 export async function descargarProduccionPdf(id: string): Promise<void> {
   const prod = await getProduccionConMateriales(id);
-  if (!prod) throw new Error('Producción no encontrada');
+  if (!prod) throw new Error('Fundición no encontrada');
   const { doc, filename } = await construir(prod);
   doc.save(filename);
 }
 
 export async function obtenerProduccionPdfBase64(id: string): Promise<{ base64: string; filename: string }> {
   const prod = await getProduccionConMateriales(id);
-  if (!prod) throw new Error('Producción no encontrada');
+  if (!prod) throw new Error('Fundición no encontrada');
   const { doc, filename } = await construir(prod);
   const dataUri = doc.output('datauristring');
   const base64 = dataUri.split(',')[1] ?? '';

@@ -1,8 +1,8 @@
 /* ============================================================
-   MGG · Producción · Repository (Supabase)
-   Órdenes de producción. Al CREAR se consumen los insumos
+   MGG · Fundición · Repository (Supabase)
+   Órdenes de fundición. Al CREAR se consumen los insumos
    (salida por almacén); al FINALIZAR el producto terminado
-   entra al inventario con su costo de producción (PMP).
+   entra al inventario con su costo de fundición (PMP).
    ============================================================ */
 import { supabase } from '@/shared/lib/supabase';
 import type { Producto, Produccion, ProduccionMaterial } from '@/shared/lib/types';
@@ -23,7 +23,7 @@ export async function crearProductoProducible(input: { nombre: string; unidad: s
   return createProducto({
     sku: slugSku('PT', nombre),
     nombre,
-    categoria: 'PRODUCCIÓN',
+    categoria: 'FUNDICIÓN',
     unidad: input.unidad || 'und',
     stock: 0,
     stock_min: 0,
@@ -71,7 +71,7 @@ export async function crearInsumoReceta(input: {
       almacen: input.almacen || 'General',
       actor: input.actor,
       actor_name: input.actor_name ?? null,
-      detalle: `Alta de insumo para producción · almacén ${input.almacen}`,
+      detalle: `Alta de insumo para fundición · almacén ${input.almacen}`,
       precio_unitario: input.costo || 0,
     });
   }
@@ -131,7 +131,7 @@ export interface RecetaItem {
 export interface RecetaGuardada {
   /** Unidades que produjo la receta base (rendimiento). */
   rendimiento: number;
-  /** Nº de receta de la última producción de ese producto (1, 2, 3…). */
+  /** Nº de receta de la última fundición de ese producto (1, 2, 3…). */
   numero: number;
   items: RecetaItem[];
 }
@@ -149,7 +149,7 @@ export async function proximaRecetaNum(productoId: string | null): Promise<numbe
 
 /**
  * Devuelve la "receta" del producto producible: los insumos usados en su
- * ÚLTIMA producción, junto al rendimiento (cantidad producida esa vez). Sirve
+ * ÚLTIMA fundición, junto al rendimiento (cantidad producida esa vez). Sirve
  * para precargar los materiales al volver a producir el mismo producto.
  */
 export async function getUltimaReceta(productoId: string): Promise<RecetaGuardada | null> {
@@ -181,7 +181,7 @@ export async function getUltimaReceta(productoId: string): Promise<RecetaGuardad
 export interface RecetaResumen {
   producto_id: string;
   producto_nombre: string;
-  produccion_id: string;     // última producción (fuente de la receta)
+  produccion_id: string;     // última fundición (fuente de la receta)
   rendimiento: number;       // cantidad producida en esa receta
   almacen_destino: string;
   costo_material: number;
@@ -195,7 +195,7 @@ export interface RecetaResumen {
 }
 
 /**
- * Lista las "recetas": una por cada producto producible, tomando su producción
+ * Lista las "recetas": una por cada producto producible, tomando su fundición
  * MÁS RECIENTE como receta vigente (qué materiales y en qué cantidad se usaron
  * para producir X unidades).
  */
@@ -230,7 +230,7 @@ export async function listRecetas(): Promise<RecetaResumen[]> {
   }
   if (!base.length) return base;
 
-  // Contar materiales por producción (una sola consulta).
+  // Contar materiales por fundición (una sola consulta).
   const ids = base.map((b) => b.produccion_id);
   const { data: mats } = await supabase
     .from('produccion_materiales')
@@ -258,8 +258,8 @@ export async function getProduccionConMateriales(id: string): Promise<Produccion
 }
 
 /**
- * Crea una orden de producción: valida disponibilidad de cada insumo en su
- * almacén, calcula el Costo de Producción (CP = CTM + mano obra + indirectos),
+ * Crea una orden de fundición: valida disponibilidad de cada insumo en su
+ * almacén, calcula el Costo de Fundición (CP = CTM + mano obra + indirectos),
  * registra los materiales y CONSUME el stock de cada insumo.
  */
 export async function crearProduccion(input: CrearProduccionInput): Promise<Produccion> {
@@ -291,7 +291,7 @@ export async function crearProduccion(input: CrearProduccionInput): Promise<Prod
 
   const manoObra = Number(input.mano_obra) || 0;
   const indirectos = Number(input.costos_indirectos) || 0;
-  const cp = costoMaterial + manoObra + indirectos; // Costo de Producción
+  const cp = costoMaterial + manoObra + indirectos; // Costo de Fundición
   const costoUnitario = round2(cp / cantidad);
   const precioVenta = input.precio_venta != null ? Number(input.precio_venta) : null;
   const ganancia = precioVenta != null ? round2((precioVenta - costoUnitario) * cantidad) : null;
@@ -299,7 +299,7 @@ export async function crearProduccion(input: CrearProduccionInput): Promise<Prod
   // Nº de receta secuencial por producto (1, 2, 3…).
   const recetaNum = await proximaRecetaNum(input.producto_id);
 
-  // 2) Insertar la orden de producción.
+  // 2) Insertar la orden de fundición.
   const { data: prod, error: pErr } = await supabase
     .from('produccion')
     .insert({
@@ -347,25 +347,25 @@ export async function crearProduccion(input: CrearProduccionInput): Promise<Prod
     actor_name: input.actor_name ?? null,
     ref_tipo: 'produccion',
     ref_id: produccion.id,
-    detalle: `Consumo para producción de ${input.producto_nombre}`,
+    detalle: `Consumo para fundición de ${input.producto_nombre}`,
   })));
 
   return produccion;
 }
 
 /**
- * Finaliza una producción: el producto terminado entra al inventario en el
- * almacén destino con su costo de producción unitario (recalcula su PMP).
+ * Finaliza una fundición: el producto terminado entra al inventario en el
+ * almacén destino con su costo de fundición unitario (recalcula su PMP).
  */
 export async function finalizarProduccion(id: string, actor: string, actorName?: string | null): Promise<Produccion> {
   const { data, error } = await supabase.from('produccion').select('*').eq('id', id).maybeSingle();
   if (error) throw error;
-  if (!data) throw new Error('Producción no encontrada');
+  if (!data) throw new Error('Fundición no encontrada');
   const prod = data as Produccion;
-  if (prod.estado === 'finalizado') throw new Error('La producción ya está finalizada.');
-  if (!prod.producto_id) throw new Error('La producción no tiene un producto terminado asociado.');
+  if (prod.estado === 'finalizado') throw new Error('La fundición ya está finalizada.');
+  if (!prod.producto_id) throw new Error('La fundición no tiene un producto terminado asociado.');
 
-  // Entrada del producto terminado al almacén destino, a su costo de producción.
+  // Entrada del producto terminado al almacén destino, a su costo de fundición.
   await registrarMovimiento({
     producto_id: prod.producto_id,
     tipo: 'entrada',
@@ -375,7 +375,7 @@ export async function finalizarProduccion(id: string, actor: string, actorName?:
     actor_name: actorName ?? null,
     ref_tipo: 'produccion',
     ref_id: prod.id,
-    detalle: `Producción finalizada: ${prod.producto_nombre} (${prod.cantidad} und)`,
+    detalle: `Fundición finalizada: ${prod.producto_nombre} (${prod.cantidad} und)`,
     precio_unitario: Number(prod.costo_unitario) || 0,
   });
 

@@ -510,10 +510,10 @@ export function InventarioPage() {
           className="kpi"
           href="#/app/produccion"
           style={{ cursor: 'pointer', textDecoration: 'none', color: 'inherit' }}
-          title="Ver órdenes de producción en curso"
+          title="Ver órdenes de fundición en curso"
         >
           <div className="icon">🔥</div>
-          <div className="label">En producción</div>
+          <div className="label">En fundición</div>
           <div className="value">{num(enProduccion)}</div>
           <div className={enProduccion > 0 ? 'delta down' : 'delta'}>
             {enProduccion > 0 ? `${num(enProduccion)} en curso` : 'ninguno en proceso'}

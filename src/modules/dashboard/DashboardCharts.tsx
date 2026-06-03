@@ -172,7 +172,7 @@ export function GraficaProduccion() {
   return (
     <div className="card" style={{ padding: '1.25rem' }}>
       <div className="card-title" style={{ marginBottom: '.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '.5rem' }}>
-        <span>Producción finalizada</span>
+        <span>Fundición finalizada</span>
         <div className="view-switch" style={{ marginTop: 0, padding: '.15rem' }}>
           <button type="button" className={`view-switch-tab${metric === 'count' ? ' active' : ''}`} onClick={() => setMetric('count')} style={{ padding: '.35rem .75rem', fontSize: '.78rem' }}>
             Unidades

@@ -7,7 +7,7 @@ const FUNCTION_SLUG = 'enviar-salida';
 /**
  * Genera el comprobante de salida/traslado en el navegador y lo envía a uno o
  * varios correos vía la Edge Function `enviar-salida` (Brevo). Mismo patrón que
- * la trazabilidad de compras y el reporte de producción. Genera el PDF una sola
+ * la trazabilidad de compras y el reporte de fundición. Genera el PDF una sola
  * vez y reusa el base64 para cada destinatario.
  */
 export async function enviarSalidaAMultiples(

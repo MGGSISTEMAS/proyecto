@@ -6,7 +6,7 @@ import { money, num, dateTime } from '@/shared/lib/format';
 import { listRecetas, type RecetaResumen } from './produccion.repository';
 
 /**
- * Lista de recetas (una por producto producible, según su producción más
+ * Lista de recetas (una por producto producible, según su fundición más
  * reciente). Al hacer clic en una fila se abre su detalle.
  */
 export function RecetasModal({
@@ -33,7 +33,7 @@ export function RecetasModal({
     !q.trim() || r.producto_nombre.toLowerCase().includes(q.trim().toLowerCase()));
 
   return (
-    <Modal title="Recetas de producción" size="lg" onClose={onClose}
+    <Modal title="Recetas de fundición" size="lg" onClose={onClose}
       footer={<button className="btn btn-ghost" onClick={onClose}>Cerrar</button>}>
       <input
         className="input"
