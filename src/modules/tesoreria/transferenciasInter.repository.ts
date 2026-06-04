@@ -1,7 +1,7 @@
 /* ============================================================
    MGG · Tesorería · Transferencias inter-sistema (puente)
    Dos sistemas independientes (cada uno su Supabase, p. ej. Mineral
-   Group y un Centro de Acopio externo como Paramana). Cuando Tesorería
+   Group y un Centro de Acopio externo como Peramanal). Cuando Tesorería
    traslada dinero a un centro de acopio EXTERNO, además del traslado
    local se crea una transferencia "saliente" y se EMPUJA al otro sistema
    vía Edge Function (transfer-enviar → transfer-recibir). El destino la

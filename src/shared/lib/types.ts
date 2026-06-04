@@ -139,7 +139,7 @@ export interface Caja {
   tipo?: string;   // 'caja' (normal) | 'centro_acopio'
   /** El centro de acopio vive en otra Supabase (otro sistema): el traslado se replica vía puente. */
   externo?: boolean;
-  /** Identificador acordado entre ambos sistemas (ej. 'paramana'). */
+  /** Identificador acordado entre ambos sistemas (ej. 'peramanal'). */
   empresa_codigo?: string | null;
   created_at: string;
   created_by?: string | null;
