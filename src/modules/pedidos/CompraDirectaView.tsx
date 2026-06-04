@@ -340,6 +340,8 @@ function FinalizarCompraModal({ compra, cajas, actor, actorName, onClose, onSave
   }
   const sumUsdMulti = round2(saldosCaja.reduce((a, s) => a + legUsd(s.moneda, Number(legMontos[s.id]) || 0), 0));
   const cubreTotalMulti = sumUsdMulti >= total - 0.01;
+  // No se puede pagar más que el total de la compra.
+  const excedeTotalMulti = esMultimoneda && sumUsdMulti > total + 0.01;
   const cuentaLabel = (c: string) => c === 'general' ? '' : c === 'juridica' ? ' · Jurídica' : ' · Personal';
 
   async function handleSubmit(e: FormEvent) {
@@ -353,6 +355,7 @@ function FinalizarCompraModal({ compra, cajas, actor, actorName, onClose, onSave
         .map((s) => ({ cuenta: s.cuenta as CuentaCaja, moneda: s.moneda, monto: Number(legMontos[s.id]) || 0 }))
         .filter((l) => l.monto > 0);
       if (!legs.length) { setError('Indicá cuánto pagar en al menos una moneda.'); return; }
+      if (excedeTotalMulti) { setError(`No podés pagar más que el total de la compra. Cargado ${montoCaja(sumUsdMulti, 'USD')}, total ${montoCaja(total, 'USD')} (te pasaste por ${montoCaja(round2(sumUsdMulti - total), 'USD')}).`); return; }
       if (!cubreTotalMulti) { setError(`Lo cargado (${montoCaja(sumUsdMulti, 'USD')}) no cubre el total (${montoCaja(total, 'USD')}).`); return; }
     }
     const items: CompraDirectaItem[] = compra.items.map((it, i) => ({ ...it, gasto: Number(gastos[i]) || 0 }));
@@ -368,7 +371,7 @@ function FinalizarCompraModal({ compra, cajas, actor, actorName, onClose, onSave
   const footer = (
     <>
       <button type="button" className="btn btn-ghost" onClick={onClose} disabled={saving}>Cancelar</button>
-      <button type="submit" form="cd-fin-form" className="btn btn-primary" disabled={saving}>{saving ? 'Finalizando…' : `Finalizar · ${montoCaja(total, moneda)}`}</button>
+      <button type="submit" form="cd-fin-form" className="btn btn-primary" disabled={saving || excedeTotalMulti}>{saving ? 'Finalizando…' : excedeTotalMulti ? 'Excede el total' : `Finalizar · ${montoCaja(total, moneda)}`}</button>
     </>
   );
 
@@ -436,7 +439,7 @@ function FinalizarCompraModal({ compra, cajas, actor, actorName, onClose, onSave
                 <tfoot>
                   <tr>
                     <td colSpan={3} style={{ textAlign: 'right', fontWeight: 600 }}>Cubierto / Total</td>
-                    <td className="mono" style={{ textAlign: 'right', fontWeight: 700, color: cubreTotalMulti ? 'var(--success)' : 'var(--warning)' }}>
+                    <td className="mono" style={{ textAlign: 'right', fontWeight: 700, color: excedeTotalMulti ? 'var(--danger)' : cubreTotalMulti ? 'var(--success)' : 'var(--warning)' }}>
                       {montoCaja(sumUsdMulti, 'USD')} / {montoCaja(total, 'USD')}
                     </td>
                   </tr>
@@ -444,8 +447,10 @@ function FinalizarCompraModal({ compra, cajas, actor, actorName, onClose, onSave
               </table>
             </div>
             <small className="muted" style={{ display: 'block', marginTop: '.3rem' }}>
-              {cubreTotalMulti
-                ? <>✓ Cubre el total{sumUsdMulti > total + 0.01 ? ` (sobran ${montoCaja(round2(sumUsdMulti - total), 'USD')})` : ''}. Cada moneda se descuenta de su saldo real con la tasa del día.</>
+              {excedeTotalMulti
+                ? <span style={{ color: 'var(--danger)' }}>⚠ Te pasaste por <strong>{montoCaja(round2(sumUsdMulti - total), 'USD')}</strong>. No podés pagar más que el total de la compra ({montoCaja(total, 'USD')}).</span>
+                : cubreTotalMulti
+                ? <>✓ Cubre exactamente el total. Cada moneda se descuenta de su saldo real con la tasa del día.</>
                 : <>Faltan <strong>{montoCaja(round2(total - sumUsdMulti), 'USD')}</strong>. Bs↔$ usa la tasa BCV del día{tasa > 0 ? ` (${tasa.toLocaleString('es-VE')})` : ''}.</>}
             </small>
           </div>

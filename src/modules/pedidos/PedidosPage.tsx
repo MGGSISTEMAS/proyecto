@@ -1128,7 +1128,7 @@ function MetodoPagoModal({
         <label className="card" style={{ display: 'flex', alignItems: 'flex-start', gap: '.5rem', marginTop: '.6rem', padding: '.55rem .7rem', cursor: 'pointer', borderColor: notaEntrega ? 'var(--success)' : 'var(--warning)' }}>
           <input type="checkbox" checked={notaEntrega} onChange={(e) => setNotaEntrega(e.target.checked)} style={{ marginTop: '.2rem' }} />
           <span style={{ fontSize: '.86rem' }}>
-            <strong>Nota de entrega</strong> — Confirmo que la mercancía se <strong>recibió y verificó</strong> contra lo solicitado. Recién entonces se paga (contra entrega).
+            <strong>Confirmo que la mercancía se recibió y verificó contra lo solicitado. Recién entonces se paga (contra entrega).</strong>
           </span>
         </label>
       )}

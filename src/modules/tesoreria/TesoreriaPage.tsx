@@ -1505,6 +1505,11 @@ function PagarOrdenModal({ row, cajas, actor, actorName, onClose, onPaid }: {
   }
   const sumUsdMulti = round2(saldosCaja.reduce((a, s) => a + legUsd(s.moneda, Number(legMontos[s.id]) || 0), 0));
   const cubreTotalMulti = sumUsdMulti >= totalUsd - 0.01;
+  // No se puede pagar más que el total de la OC (ni en multipago ni en pago simple).
+  const excedeTotalMulti = sumUsdMulti > totalUsd + 0.01;
+  const montoUsdSimple = moneda === 'Bs' ? (tasa > 0 ? round2(montoNum / tasa) : 0) : round2(montoNum);
+  const excedeTotalSimple = !esMultimoneda && montoUsdSimple > totalUsd + 0.01;
+  const excedeTotal = esMultimoneda ? excedeTotalMulti : excedeTotalSimple;
 
   // Archivos cargados durante la OC: cotizaciones (PDF) de las ofertas.
   const [adjuntos, setAdjuntos] = useState<OfertaProveedor[]>([]);
@@ -1538,12 +1543,14 @@ function PagarOrdenModal({ row, cajas, actor, actorName, onClose, onPaid }: {
           .map((s) => ({ cuenta: s.cuenta as CuentaCaja, moneda: s.moneda, monto: Number(legMontos[s.id]) || 0, montoUsd: legUsd(s.moneda, Number(legMontos[s.id]) || 0) }))
           .filter((l) => l.monto > 0);
         if (!legs.length) { setError('Indicá cuánto pagar en al menos una moneda.'); setSaving(false); return; }
+        if (excedeTotalMulti) { setError(`No podés pagar más que el total de la OC. Cargado ${monto(sumUsdMulti, 'USD')}, total ${monto(totalUsd, 'USD')} (te pasaste por ${monto(round2(sumUsdMulti - totalUsd), 'USD')}).`); setSaving(false); return; }
         if (!cubreTotalMulti) { setError(`Lo cargado (${monto(sumUsdMulti, 'USD')}) no cubre el total (${monto(totalUsd, 'USD')}).`); setSaving(false); return; }
         await pagarOrdenCompraMulti({ orden: o, cajaId, legs, factura, motivoPago: motivoPago || null, actorEmail: actor, actorName });
         notify(`OC ${o.oc_codigo ?? o.codigo} pagada · multipago ${monto(sumUsdMulti, 'USD')}`, 'success', { link: '#/app/tesoreria' });
         onPaid();
         return;
       }
+      if (excedeTotalSimple) { setError(`No podés pagar más que el total de la OC (${monto(totalUsd, 'USD')}). El monto ingresado equivale a ${monto(montoUsdSimple, 'USD')}.`); setSaving(false); return; }
       await pagarOrdenCompra({
         orden: o, cajaId, monto: Number(montoStr) || 0,
         factura, motivoPago: motivoPago || null, actorEmail: actor, actorName,
@@ -1557,7 +1564,7 @@ function PagarOrdenModal({ row, cajas, actor, actorName, onClose, onPaid }: {
     <>
       <button className="btn btn-ghost" onClick={() => descargarOrdenCompraPdf(o.id).catch(() => toast('No se pudo generar el PDF', 'error'))}>↓ OC PDF</button>
       <button className="btn btn-ghost" onClick={onClose} disabled={saving}>Cancelar</button>
-      <button type="submit" form="pagar-oc" className="btn btn-primary" disabled={saving}>{saving ? 'Pagando…' : `PAGAR ORDEN · ${esMultimoneda ? monto(sumUsdMulti, 'USD') : monto(Number(montoStr) || 0, moneda)}`}</button>
+      <button type="submit" form="pagar-oc" className="btn btn-primary" disabled={saving || excedeTotal}>{saving ? 'Pagando…' : excedeTotal ? 'Excede el total de la OC' : `PAGAR ORDEN · ${esMultimoneda ? monto(sumUsdMulti, 'USD') : monto(Number(montoStr) || 0, moneda)}`}</button>
     </>
   );
 
@@ -1707,7 +1714,11 @@ function PagarOrdenModal({ row, cajas, actor, actorName, onClose, onPaid }: {
           {!esMultimoneda && (
             <div className="form-row">
               <label>Monto a pagar ({moneda})</label>
-              <input className="input mono" type="number" min={0} step="any" value={montoStr} onChange={(e) => setMontoStr(dosDecimales(e.target.value))} required={!esMultimoneda} />
+              <input className="input mono" type="number" min={0} step="any" value={montoStr} onChange={(e) => setMontoStr(dosDecimales(e.target.value))} required={!esMultimoneda}
+                style={{ borderColor: excedeTotalSimple ? 'var(--danger)' : undefined }} />
+              {excedeTotalSimple && (
+                <small style={{ color: 'var(--danger)' }}>⚠ No podés pagar más que el total de la OC ({monto(totalUsd, 'USD')}{moneda === 'Bs' && tasa > 0 ? ` ≈ ${monto(aBs(totalUsd, tasa), 'Bs')}` : ''}).</small>
+              )}
               {tasa > 0 && montoNum > 0 && (
                 <small className="muted">
                   Equivale a <strong className="mono">{monto(equivOtra, moneda === 'Bs' ? 'USD' : 'Bs')}</strong>
@@ -1751,7 +1762,7 @@ function PagarOrdenModal({ row, cajas, actor, actorName, onClose, onPaid }: {
                 <tfoot>
                   <tr>
                     <td colSpan={3} style={{ textAlign: 'right', fontWeight: 600 }}>Cubierto / Total</td>
-                    <td className="mono" style={{ textAlign: 'right', fontWeight: 700, color: cubreTotalMulti ? 'var(--success)' : 'var(--warning)' }}>
+                    <td className="mono" style={{ textAlign: 'right', fontWeight: 700, color: excedeTotalMulti ? 'var(--danger)' : cubreTotalMulti ? 'var(--success)' : 'var(--warning)' }}>
                       {monto(sumUsdMulti, 'USD')} / {monto(totalUsd, 'USD')}
                     </td>
                   </tr>
@@ -1759,8 +1770,10 @@ function PagarOrdenModal({ row, cajas, actor, actorName, onClose, onPaid }: {
               </table>
             </div>
             <small className="muted" style={{ display: 'block', marginTop: '.3rem' }}>
-              {cubreTotalMulti
-                ? <>✓ Cubre el total{sumUsdMulti > totalUsd + 0.01 ? ` (sobran ${monto(round2(sumUsdMulti - totalUsd), 'USD')})` : ''}. Cada moneda se descuenta de su saldo real con la tasa del día.</>
+              {excedeTotalMulti
+                ? <span style={{ color: 'var(--danger)' }}>⚠ Te pasaste por <strong>{monto(round2(sumUsdMulti - totalUsd), 'USD')}</strong>. No podés pagar más que el total de la OC ({monto(totalUsd, 'USD')}).</span>
+                : cubreTotalMulti
+                ? <>✓ Cubre exactamente el total. Cada moneda se descuenta de su saldo real con la tasa del día.</>
                 : <>Faltan <strong>{monto(round2(totalUsd - sumUsdMulti), 'USD')}</strong>. Bs↔$ usa la tasa BCV de arriba.</>}
             </small>
           </div>
