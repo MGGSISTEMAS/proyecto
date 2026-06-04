@@ -4,6 +4,7 @@ import { Modal } from '@/shared/ui/Modal';
 import { toast } from '@/shared/ui/Toast';
 import { notify } from '@/shared/lib/notify';
 import { dateTime, money, num } from '@/shared/lib/format';
+import { useRealtime } from '@/shared/lib/useRealtime';
 import { useSession } from '@/modules/auth/authStore';
 import { usePermissions } from '@/modules/auth/PermissionsContext';
 import { getNombresAlmacenes } from '@/modules/inventario/almacenes.repository';
@@ -71,6 +72,9 @@ export function CombustiblePage() {
       .finally(() => { if (!cancel) setLoading(false); });
     return () => { cancel = true; };
   }, [reload]);
+
+  // Realtime multiusuario: las solicitudes de combustible se reflejan al instante.
+  useRealtime(['combustible_solicitudes'], () => { void reload(); });
 
   const activos = useMemo(() => combustibles.filter((c) => c.estado === 'activo'), [combustibles]);
   const valorTotal = useMemo(() => combustibles.reduce((a, c) => a + (Number(c.litros) || 0) * (Number(c.costo_litro) || 0), 0), [combustibles]);

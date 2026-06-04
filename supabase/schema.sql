@@ -247,6 +247,10 @@ create table if not exists public.cajas (
   updated_at  timestamptz,
   unique (nombre, moneda)
 );
+-- Centros de acopio (destino de traslado, saldo propio) y enlace inter-sistema.
+alter table public.cajas add column if not exists tipo text;            -- null | 'centro_acopio'
+alter table public.cajas add column if not exists externo boolean not null default false; -- vive en otra Supabase
+alter table public.cajas add column if not exists empresa_codigo text;  -- identificador acordado entre sistemas (ej. 'paramana')
 
 create table if not exists public.movimientos_caja (
   id            uuid primary key default gen_random_uuid(),
@@ -276,6 +280,53 @@ create table if not exists public.movimientos_caja (
 create index if not exists idx_movcaja_caja on public.movimientos_caja(caja_id, at desc);
 create index if not exists idx_movcaja_at on public.movimientos_caja(at desc);
 create index if not exists idx_movcaja_pendiente on public.movimientos_caja(estado_mineral) where estado_mineral = 'pendiente';
+
+-- ============================================================
+-- Transferencias inter-sistema (puente entre dos Supabase independientes).
+-- Cuando Tesorería traslada dinero a un centro de acopio EXTERNO (cajas.externo),
+-- se crea una fila 'saliente' y se empuja al otro sistema vía Edge Function
+-- (enviar-transferencia → recibir-transferencia). El destino la guarda como
+-- 'entrante / por_confirmar' y, al confirmar el operador, acredita su caja y
+-- devuelve el ACK (confirmar-transferencia) que pasa la saliente a 'recibida'.
+-- transf_id es el id GLOBAL compartido (idempotencia: no se cuenta dos veces).
+-- ============================================================
+create table if not exists public.transferencias_inter (
+  id            uuid primary key default gen_random_uuid(),
+  transf_id     uuid not null unique,
+  direccion     text not null check (direccion in ('saliente','entrante')),
+  estado        text not null default 'enviada'
+                  check (estado in ('enviada','por_confirmar','recibida','rechazada','error')),
+  empresa_origen   text not null,
+  empresa_destino  text not null,
+  caja_id       uuid references public.cajas(id) on delete set null,
+  caja_nombre   text,
+  legs          jsonb not null default '[]'::jsonb,   -- [{cuenta,moneda,monto,tasa_bs}]
+  resumen       text,
+  motivo        text,
+  callback_base text,                                  -- functions url del origen (para el ACK)
+  mensaje_error text,
+  actor         text,
+  actor_name    text,
+  created_at    timestamptz not null default now(),
+  confirmada_at timestamptz
+);
+create index if not exists idx_transf_inter_dir_estado on public.transferencias_inter(direccion, estado);
+alter table public.transferencias_inter enable row level security;
+create policy "transf read auth"  on public.transferencias_inter for select using (auth.role()='authenticated');
+create policy "transf write auth" on public.transferencias_inter for all using (auth.role()='authenticated') with check (auth.role()='authenticated');
+
+-- Realtime: el sistema es multiusuario; lo que registra un usuario se refleja en
+-- los demás. Se publica el conjunto operativo (idempotente).
+do $$
+declare t text;
+begin
+  foreach t in array array['movimientos_caja','caja_saldos','cajas','transferencias_inter','ordenes','productos','movimientos','combustible_solicitudes','compras_directas']
+  loop
+    if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename=t) then
+      execute format('alter publication supabase_realtime add table public.%I', t);
+    end if;
+  end loop;
+end $$;
 
 -- A quién va dirigida una salida/traslado de material.
 alter table public.movimientos add column if not exists destino text;

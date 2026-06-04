@@ -247,6 +247,9 @@ export function AppShell() {
         <div className="sidebar-section">Próximamente</div>
         <nav className="nav">
           <NavItem to="#" icon="↗" label="Ventas" disabled />
+          <NavItem to="#" icon="🏭" label="C. Acopio LA ESPERANZA" disabled />
+          <NavItem to="#" icon="🏭" label="C. Acopio LOS PIJIGUAOS" disabled />
+          <NavItem to="#" icon="🏭" label="C. Acopio LA ESMERALDA" disabled />
         </nav>
 
         <div className="sidebar-footer">

@@ -6,6 +6,7 @@ import { StatusBadge } from '@/shared/ui/StatusBadge';
 import { toast } from '@/shared/ui/Toast';
 import { notify } from '@/shared/lib/notify';
 import { dateTime, money, num, relTime } from '@/shared/lib/format';
+import { useRealtime } from '@/shared/lib/useRealtime';
 import { useSession } from '@/modules/auth/authStore';
 import type {
   EstadoOrden,
@@ -44,6 +45,8 @@ import { listOfertasByOrden, labelCondicionPago } from './ofertas.repository';
 import { listCajasActivas } from '@/modules/salidas/cajas.repository';
 import type { AbonoCredito, Caja } from '@/shared/lib/types';
 import { listMonedas } from '@/modules/tesoreria/monedas';
+import { listDatosPago, requiereDatos, type DatosPago } from './datosPago.repository';
+import { DatosPagoFields, validarDatosPago } from '@/shared/ui/DatosPagoFields';
 import { crearEvaluacion } from './evaluaciones.repository';
 import { createProducto } from '@/modules/inventario/inventario.repository';
 import { listAlmacenes } from '@/modules/inventario/almacenes.repository';
@@ -197,6 +200,9 @@ export function PedidosPage() {
       setError(e instanceof Error ? e.message : 'Error al cargar pedidos');
     }
   }, []);
+
+  // Realtime multiusuario: las órdenes/compras se reflejan al instante entre usuarios.
+  useRealtime(['ordenes', 'productos'], () => { void refresh(); });
 
   useEffect(() => {
     let cancelled = false;
@@ -934,16 +940,26 @@ function MetodoPagoModal({
   const [legs, setLegs] = useState<PagoMetodo[]>([{ metodo: 'divisas_efectivo', moneda: 'USD', monto: 0 }]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Datos de pago del proveedor ya guardados (para precargar por método).
+  const [datosGuardados, setDatosGuardados] = useState<Record<string, DatosPago>>({});
   // Contra entrega: ya se recibió y verificó; se confirma la Nota de entrega antes de pagar.
   const esContraEntrega = orden.condiciones_pago === 'contra_entrega';
   const [notaEntrega, setNotaEntrega] = useState(false);
 
   useEffect(() => { listMonedas().then(setMonedas).catch(() => { /* base */ }); }, []);
+  useEffect(() => {
+    if (!orden.proveedor_id) return;
+    listDatosPago(orden.proveedor_id).then(setDatosGuardados).catch(() => { /* sin datos previos */ });
+  }, [orden.proveedor_id]);
 
   function setLeg(i: number, patch: Partial<PagoMetodo>) {
     setLegs((ls) => ls.map((l, k) => (k === i ? { ...l, ...patch } : l)));
   }
-  function addLeg() { setLegs((ls) => [...ls, { metodo: 'transferencia', moneda: 'Bs', monto: 0 }]); }
+  // Al cambiar de método, precarga los datos guardados del proveedor para ese método.
+  function cambiarMetodo(i: number, metodo: string) {
+    setLeg(i, { metodo, datos: requiereDatos(metodo) ? (datosGuardados[metodo] ?? {}) : undefined });
+  }
+  function addLeg() { setLegs((ls) => [...ls, { metodo: 'transferencia', moneda: 'Bs', monto: 0, datos: datosGuardados['transferencia'] ?? {} }]); }
   function removeLeg(i: number) { setLegs((ls) => ls.filter((_, k) => k !== i)); }
 
   // El monto lo define Tesorería al pagar; acá solo se eligen método(s) y moneda(s).
@@ -953,6 +969,13 @@ function MetodoPagoModal({
     setError(null);
     if (!validos.length) { setError('Indicá al menos un método de pago.'); return; }
     if (esContraEntrega && !notaEntrega) { setError('Confirmá la Nota de entrega (verificaste lo recibido) antes de enviar a pagar.'); return; }
+    // Validar datos del proveedor en los métodos que los requieren.
+    for (const l of validos) {
+      if (requiereDatos(l.metodo)) {
+        const err = validarDatosPago(l.metodo, l.datos ?? {});
+        if (err) { setError(`${METODOS_PAGO.find((m) => m.value === l.metodo)?.label}: ${err}`); return; }
+      }
+    }
     setSaving(true);
     try { await onSent(validos); }
     catch (e) { setError(e instanceof Error ? e.message : 'No se pudo enviar'); setSaving(false); }
@@ -980,27 +1003,32 @@ function MetodoPagoModal({
       </p>
       {error && <div className="card" style={{ borderColor: 'var(--danger)', marginBottom: '.75rem' }}><strong>Error:</strong> {error}</div>}
 
-      <div className="table-wrap">
-        <table className="table" style={{ fontSize: '.85rem' }}>
-          <thead><tr><th>Método</th><th>Moneda</th><th></th></tr></thead>
-          <tbody>
-            {legs.map((l, i) => (
-              <tr key={i}>
-                <td>
-                  <select className="select" value={l.metodo} onChange={(e) => setLeg(i, { metodo: e.target.value })}>
-                    {METODOS_PAGO.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
-                  </select>
-                </td>
-                <td>
-                  <select className="select" value={l.moneda} onChange={(e) => setLeg(i, { moneda: e.target.value })}>
-                    {monedas.map((m) => <option key={m} value={m}>{m}</option>)}
-                  </select>
-                </td>
-                <td>{legs.length > 1 && <button type="button" className="btn btn-sm btn-ghost" onClick={() => removeLeg(i)}>✕</button>}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div style={{ display: 'grid', gap: '.6rem' }}>
+        {legs.map((l, i) => (
+          <div key={i} className="card" style={{ margin: 0, padding: '.7rem' }}>
+            <div style={{ display: 'flex', gap: '.5rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <div className="form-row" style={{ margin: 0, flex: '1 1 180px' }}>
+                <label>Método</label>
+                <select className="select" value={l.metodo} onChange={(e) => cambiarMetodo(i, e.target.value)}>
+                  {METODOS_PAGO.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+                </select>
+              </div>
+              <div className="form-row" style={{ margin: 0, flex: '0 0 120px' }}>
+                <label>Moneda</label>
+                <select className="select" value={l.moneda} onChange={(e) => setLeg(i, { moneda: e.target.value })}>
+                  {monedas.map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </div>
+              {legs.length > 1 && <button type="button" className="btn btn-sm btn-ghost" onClick={() => removeLeg(i)}>✕ Quitar</button>}
+            </div>
+            {requiereDatos(l.metodo) && (
+              <div style={{ marginTop: '.6rem', borderTop: '1px dashed var(--border)', paddingTop: '.6rem' }}>
+                <div className="muted" style={{ fontSize: '.74rem', marginBottom: '.4rem' }}>Datos del proveedor para pagarle (se guardan para próximas compras)</div>
+                <DatosPagoFields metodo={l.metodo} value={l.datos ?? {}} onChange={(d) => setLeg(i, { datos: d })} />
+              </div>
+            )}
+          </div>
+        ))}
       </div>
       <button type="button" className="btn btn-sm btn-ghost" style={{ marginTop: '.5rem' }} onClick={addLeg}>+ Agregar método (multipago)</button>
       {esContraEntrega && (

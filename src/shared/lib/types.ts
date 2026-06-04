@@ -14,6 +14,7 @@ export interface PagoMetodo {
   metodo: string;   // 'efectivo' | 'divisas_efectivo' | 'transferencia' | 'pago_movil' | 'binance_usdt' | 'zelle' | 'otro'
   moneda: string;   // Bs, USD, USDT, COP, …
   monto: number;
+  datos?: Record<string, string>; // datos de pago del proveedor (pago móvil / transferencia / zelle / binance)
 }
 export type EstadoFactura = 'pendiente' | 'pagada' | 'anulada';
 export type TipoMovimiento = 'creacion' | 'entrada' | 'salida' | 'consumo' | 'transferencia' | 'ajuste' | 'fundicion' | 'fin_fundicion';
@@ -135,9 +136,43 @@ export interface Caja {
   moneda: Moneda;
   saldo: number;
   estado: EstadoGenerico;
+  tipo?: string;   // 'caja' (normal) | 'centro_acopio'
+  /** El centro de acopio vive en otra Supabase (otro sistema): el traslado se replica vía puente. */
+  externo?: boolean;
+  /** Identificador acordado entre ambos sistemas (ej. 'paramana'). */
+  empresa_codigo?: string | null;
   created_at: string;
   created_by?: string | null;
   updated_at?: string | null;
+}
+
+/* ───────── Transferencias inter-sistema (puente entre dos Supabase) ───────── */
+export type DireccionTransfer = 'saliente' | 'entrante';
+export type EstadoTransfer = 'enviada' | 'por_confirmar' | 'recibida' | 'rechazada' | 'error';
+
+/** Una pata por moneda de la transferencia (igual que un leg de traslado). */
+export interface TransferLeg { cuenta: CuentaCaja; moneda: string; monto: number; tasa_bs?: number | null; }
+
+/** Transferencia de dinero entre dos sistemas independientes (cada uno su Supabase).
+ *  `transf_id` es el id GLOBAL compartido por ambos lados (idempotencia). */
+export interface TransferenciaInter {
+  id: string;
+  transf_id: string;
+  direccion: DireccionTransfer;
+  estado: EstadoTransfer;
+  empresa_origen: string;
+  empresa_destino: string;
+  caja_id?: string | null;
+  caja_nombre?: string | null;
+  legs: TransferLeg[];
+  resumen?: string | null;
+  motivo?: string | null;
+  callback_base?: string | null;
+  mensaje_error?: string | null;
+  actor?: string | null;
+  actor_name?: string | null;
+  created_at: string;
+  confirmada_at?: string | null;
 }
 
 export type TipoMovimientoCaja = 'ingreso' | 'salida' | 'traslado_salida' | 'traslado_entrada' | 'ajuste';

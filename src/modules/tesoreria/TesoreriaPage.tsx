@@ -3,20 +3,27 @@ import { EmptyState } from '@/shared/ui/EmptyState';
 import { Modal } from '@/shared/ui/Modal';
 import { toast } from '@/shared/ui/Toast';
 import { notify } from '@/shared/lib/notify';
-import { dateTime, date as fmtDate } from '@/shared/lib/format';
+import { dateTime, date as fmtDate, dosDecimales } from '@/shared/lib/format';
+import { useRealtime } from '@/shared/lib/useRealtime';
 import { useSession } from '@/modules/auth/authStore';
 import { usePermissions } from '@/modules/auth/PermissionsContext';
 import { GestionarCajasModal } from '@/modules/salidas/GestionarCajasModal';
 import { listDirectorioUsuarios, type PersonaDirectorio } from '@/modules/salidas/salidas.repository';
-import type { Caja, Moneda, MovimientoCaja } from '@/shared/lib/types';
+import type { Caja, MovimientoCaja } from '@/shared/lib/types';
 import { HistorialTasasModal } from './HistorialTasasModal';
-import { getTasaHoy, aBs, aExtranjero, round2, getTasasMercado, refrescarBinanceP2P, getBinance3, type TasasMercado, type Binance3 } from './tasas.repository';
-import { saldosDeCaja, ingresarDivisa, listLotes, listSaldos } from './cajaSaldos.repository';
+import { TasasView } from './TasasView';
+import { getTasaHoy, aBs, aExtranjero, round2, getTasasMercado, refrescarBinanceP2P, getBinance3, refrescarTasasSiVencido, type TasasMercado, type Binance3 } from './tasas.repository';
+import { saldosDeCaja, ingresarDivisa, listLotes, listSaldos, trasladoEntreCajasMulti } from './cajaSaldos.repository';
+import {
+  crearTransferenciaSaliente, confirmarTransferenciaEntrante, reintentarTransferencia,
+  listTransferenciasInter,
+} from './transferenciasInter.repository';
+import type { TransferenciaInter, TransferLeg } from '@/shared/lib/types';
 import { listMonedas, addMoneda } from './monedas';
 import type { MonedaCaja, CuentaCaja, CajaSaldo, CajaLote } from '@/shared/lib/types';
 import { BarChart, type ChartPoint } from '@/shared/ui/Chart';
 import {
-  listCajasActivas, trasladoDinero,
+  listCajasActivas, listCentrosAcopio,
   registrarGasto, pagarPersonal, disponibilidadFinanciera, listLibroMayor,
   type Disponibilidad,
 } from './tesoreria.repository';
@@ -25,6 +32,9 @@ import {
   listOrdenesEnCredito, registrarAbonoMulti, listAbonos, type AbonoLeg,
 } from '@/modules/pedidos/pedidos.repository';
 import { labelCondicionPago } from '@/modules/pedidos/ofertas.repository';
+import { resumenDatosPago } from '@/shared/ui/DatosPagoFields';
+import { descargarReportePdf } from './reportePdf';
+import { enviarReportePorCorreo } from './enviarReporte';
 import type { AbonoCredito } from '@/shared/lib/types';
 import { descargarOrdenCompraPdf } from '@/modules/pedidos/ordenCompraPdf';
 import { listOfertasByOrden, getPdfOfertaSignedUrl } from '@/modules/pedidos/ofertas.repository';
@@ -60,25 +70,34 @@ export function TesoreriaPage() {
   const [cajaSel, setCajaSel] = useState<Caja | null>(null);
   const [porPagarCount, setPorPagarCount] = useState(0);
   const [creditosCount, setCreditosCount] = useState(0);
+  const [vista, setVista] = useState<'tesoreria' | 'tasas' | 'movimientos'>('tesoreria');
 
   // Filtros del registro de movimientos
-  const [fMoneda, setFMoneda] = useState<'' | Moneda>('');
+  const [fMoneda, setFMoneda] = useState<string>('');
+  const [monedasReg, setMonedasReg] = useState<string[]>(['Bs', 'USD', 'USDT', 'COP']);
+  useEffect(() => { listMonedas().then(setMonedasReg).catch(() => { /* base */ }); }, []);
   const [fTipo, setFTipo] = useState('');
   const [fDesde, setFDesde] = useState('');
   const [fHasta, setFHasta] = useState('');
 
+  const [transfers, setTransfers] = useState<TransferenciaInter[]>([]);
+
   const reload = useCallback(async () => {
-    const [d, cs, sal, mov, pp, cr] = await Promise.all([
+    const [d, cs, sal, mov, pp, cr, tr] = await Promise.all([
       disponibilidadFinanciera(),
       listCajasActivas(),
       listSaldos().catch(() => [] as CajaSaldo[]),
       listLibroMayor({ moneda: fMoneda || undefined, tipo: fTipo || undefined, desde: fDesde || undefined, hasta: fHasta || undefined }),
       listOrdenesPorPagar().catch(() => [] as OrdenPorPagar[]),
       listOrdenesEnCredito().catch(() => [] as OrdenPorPagar[]),
+      listTransferenciasInter().catch(() => [] as TransferenciaInter[]),
     ]);
     const crPendientes = cr.filter((x) => (Number(x.orden.total) - (Number(x.orden.abonado_total) || 0)) > 0.01);
-    setDisp(d); setCajas(cs); setSaldos(sal); setLibro(mov); setPorPagarCount(pp.length); setCreditosCount(crPendientes.length);
+    setDisp(d); setCajas(cs); setSaldos(sal); setLibro(mov); setPorPagarCount(pp.length); setCreditosCount(crPendientes.length); setTransfers(tr);
   }, [fMoneda, fTipo, fDesde, fHasta]);
+
+  // Realtime: multiusuario · lo que registra otro usuario (o el otro sistema) se refleja acá.
+  useRealtime(['movimientos_caja', 'caja_saldos', 'cajas', 'transferencias_inter', 'ordenes'], () => { void reload(); });
 
   useEffect(() => {
     setLoading(true);
@@ -94,6 +113,18 @@ export function TesoreriaPage() {
 
   const cerrarYRecargar = async () => { setModal('none'); await reload(); };
 
+  // Metadatos del reporte PDF/correo del registro de movimientos (según filtros).
+  const reporteMeta = () => ({
+    titulo: 'REPORTE DE MOVIMIENTOS',
+    subtitulo: [
+      fDesde && `Desde ${fDesde}`, fHasta && `Hasta ${fHasta}`,
+      fMoneda && `Moneda ${fMoneda}`, fTipo && `Tipo ${fTipo}`,
+    ].filter(Boolean).join(' · ') || 'Todos los movimientos',
+  });
+
+  // Respaldo del cron: si las tasas están vencidas (>11h), las refresca al abrir.
+  useEffect(() => { void refrescarTasasSiVencido().catch(() => { /* sin conexión */ }); }, []);
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
@@ -101,8 +132,16 @@ export function TesoreriaPage() {
           <h1 style={{ margin: 0 }}>🏦 Tesorería</h1>
           <p className="muted" style={{ margin: '.25rem 0 0' }}>Flujo de dinero, registro de movimientos y pagos.</p>
         </div>
+        <div className="view-toggle" role="tablist" aria-label="Vista de tesorería">
+          <button className={vista === 'tesoreria' ? 'active' : ''} onClick={() => setVista('tesoreria')}>🏦 Tesorería</button>
+          <button className={vista === 'tasas' ? 'active' : ''} onClick={() => setVista('tasas')}>📈 Tasas del Día</button>
+          <button className={vista === 'movimientos' ? 'active' : ''} onClick={() => setVista('movimientos')}>📒 Registro de Movimientos</button>
+        </div>
       </div>
 
+      {vista === 'tasas' && <TasasView />}
+
+      {vista === 'tesoreria' && (
       <>
           {/* Disponibilidad financiera */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
@@ -157,7 +196,14 @@ export function TesoreriaPage() {
             })}
           </div>
 
-          {/* Registro de movimientos */}
+          {/* Transferencias inter-sistema (centros de acopio externos / otra Supabase) */}
+          <TransferenciasInterPanel transfers={transfers} cajas={cajas} canWrite={canWrite} actor={actor} actorName={actorName} onChanged={reload} />
+      </>
+      )}
+
+      {vista === 'movimientos' && (
+      <>
+          {/* Registro de movimientos (vista propia) */}
           <div className="card">
             <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '.5rem' }}>
               <span>Registro de movimientos</span>
@@ -169,8 +215,9 @@ export function TesoreriaPage() {
                   Hasta <input className="input" type="date" value={fHasta} onChange={(e) => setFHasta(e.target.value)} style={{ width: 'auto' }} />
                 </label>
                 {(fDesde || fHasta) && <button className="btn btn-sm btn-ghost" onClick={() => { setFDesde(''); setFHasta(''); }}>✕ Fechas</button>}
-                <select className="select" value={fMoneda} onChange={(e) => setFMoneda(e.target.value as '' | Moneda)} style={{ width: 'auto' }}>
-                  <option value="">Toda moneda</option><option value="USD">USD</option><option value="Bs">Bs</option>
+                <select className="select" value={fMoneda} onChange={(e) => setFMoneda(e.target.value)} style={{ width: 'auto' }}>
+                  <option value="">Toda moneda</option>
+                  {monedasReg.map((m) => <option key={m} value={m}>{m}</option>)}
                 </select>
                 <select className="select" value={fTipo} onChange={(e) => setFTipo(e.target.value)} style={{ width: 'auto' }}>
                   <option value="">Todo movimiento</option>
@@ -178,6 +225,16 @@ export function TesoreriaPage() {
                   <option value="traslado_salida">Traslados</option><option value="ajuste">Ajustes</option>
                 </select>
               </div>
+            </div>
+            <div style={{ display: 'flex', gap: '.4rem', flexWrap: 'wrap', marginBottom: '.5rem' }}>
+              <button className="btn btn-sm btn-ghost" disabled={!libro.length} onClick={async () => {
+                try { await descargarReportePdf(libro, reporteMeta()); } catch (e) { toast(e instanceof Error ? e.message : 'No se pudo generar el PDF', 'error'); }
+              }}>↓ PDF</button>
+              <button className="btn btn-sm btn-ghost" disabled={!libro.length} onClick={async () => {
+                const email = window.prompt('Correo destino (dejá vacío para enviar a los admin/jefe):', '') ?? undefined;
+                try { const r = await enviarReportePorCorreo(libro, reporteMeta(), email || undefined); toast(`Reporte enviado a: ${r.destinatarios.join(', ')}`, 'success'); }
+                catch (e) { toast(e instanceof Error ? e.message : 'No se pudo enviar el correo', 'error'); }
+              }}>✉ Enviar por correo</button>
             </div>
             <div className="table-wrap">
               <table className="table" style={{ fontSize: '.85rem' }}>
@@ -205,6 +262,7 @@ export function TesoreriaPage() {
             </div>
           </div>
       </>
+      )}
 
       {modal === 'gasto' && <GastoModal cajas={cajas} actor={actor} actorName={actorName} onClose={() => setModal('none')} onSaved={cerrarYRecargar} />}
       {modal === 'traslado' && <TrasladoModal cajas={cajas} actor={actor} actorName={actorName} onClose={() => setModal('none')} onSaved={cerrarYRecargar} />}
@@ -311,9 +369,19 @@ function CajaDetalleModal({ caja, canWrite, actor, actorName, onClose, onChanged
     <Modal title={`Caja · ${caja.nombre}`} size="xl" onClose={onClose} footer={<button className="btn btn-ghost" onClick={onClose}>Cerrar</button>}>
       {/* Saldos por cuenta/moneda */}
       <div className="card" style={{ marginBottom: '.6rem' }}>
-        <div className="card-title" style={{ marginBottom: '.4rem', display: 'flex', justifyContent: 'space-between' }}>
+        <div className="card-title" style={{ marginBottom: '.4rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '.4rem' }}>
           <span>Saldos por cuenta / moneda</span>
-          <span className="muted" style={{ fontSize: '.8rem' }}>Total equivalente: <strong className="mono">{monto(totalBs, 'Bs')}</strong></span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '.4rem' }}>
+            <span className="muted" style={{ fontSize: '.8rem' }}>Total: <strong className="mono">{monto(totalBs, 'Bs')}</strong></span>
+            <button className="btn btn-sm btn-ghost" disabled={!movs.length} onClick={async () => {
+              try { await descargarReportePdf(movs, { titulo: 'REPORTE DE CAJA', subtitulo: caja.nombre }); } catch (e) { toast(e instanceof Error ? e.message : 'No se pudo generar el PDF', 'error'); }
+            }}>↓ PDF</button>
+            <button className="btn btn-sm btn-ghost" disabled={!movs.length} onClick={async () => {
+              const email = window.prompt('Correo destino (vacío = admin/jefe):', '') ?? undefined;
+              try { const r = await enviarReportePorCorreo(movs, { titulo: 'REPORTE DE CAJA', subtitulo: caja.nombre }, email || undefined); toast(`Enviado a: ${r.destinatarios.join(', ')}`, 'success'); }
+              catch (e) { toast(e instanceof Error ? e.message : 'No se pudo enviar', 'error'); }
+            }}>✉ Correo</button>
+          </span>
         </div>
         <div className="table-wrap">
           <table className="table" style={{ fontSize: '.84rem' }}>
@@ -326,8 +394,11 @@ function CajaDetalleModal({ caja, canWrite, actor, actorName, onClose, onChanged
                   <td>{s.cuenta === 'general' ? '—' : s.cuenta === 'juridica' ? 'Jurídica' : 'Personal'}</td>
                   <td><span className="badge">{s.moneda}</span></td>
                   <td className="mono" style={{ textAlign: 'right' }}>{monto(s.saldo, s.moneda)}</td>
-                  <td className="mono" style={{ textAlign: 'right' }}>{s.moneda === 'Bs' ? '—' : (s.tasa_prom != null ? Number(s.tasa_prom).toLocaleString('es-VE', { maximumFractionDigits: 4 }) : '—')}</td>
-                  <td className="mono" style={{ textAlign: 'right' }}>{monto(equivBs(s), 'Bs')}</td>
+                  <td className="mono" style={{ textAlign: 'right' }}>{s.moneda === 'Bs' ? (mercado?.bcvUsd ? `BCV ${Number(mercado.bcvUsd).toLocaleString('es-VE', { maximumFractionDigits: 4 })}` : '—') : (s.tasa_prom != null ? Number(s.tasa_prom).toLocaleString('es-VE', { maximumFractionDigits: 4 }) : '—')}</td>
+                  <td className="mono" style={{ textAlign: 'right' }}>
+                    {monto(equivBs(s), 'Bs')}
+                    {s.moneda === 'Bs' && mercado?.bcvUsd ? <div className="muted" style={{ fontSize: '.7rem' }}>≈ {monto(Number(s.saldo) / mercado.bcvUsd, 'USD')} a BCV</div> : null}
+                  </td>
                   <td style={{ textAlign: 'right' }}><button className="btn btn-sm btn-ghost" onClick={() => verLotes(s)}>Trazabilidad</button></td>
                 </tr>
               ))}
@@ -335,6 +406,37 @@ function CajaDetalleModal({ caja, canWrite, actor, actorName, onClose, onChanged
           </table>
         </div>
       </div>
+
+      {/* Comparativo de tasas: Binance (USDT/VES) vs BCV + margen de ahorro */}
+      {(() => {
+        const bin = mercado?.usdtVes ?? null;
+        const bcv = mercado?.bcvUsd ?? null;
+        const margen = bin && bcv && bin > 0 ? ((bin - bcv) / bin) * 100 : null;
+        return (
+          <div className="card" style={{ marginBottom: '.6rem' }}>
+            <div className="card-title" style={{ marginBottom: '.4rem' }}><span>Tasas de referencia (Bs por USD)</span></div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '.6rem' }}>
+              <div>
+                <div className="muted" style={{ fontSize: '.68rem' }}>BINANCE (USDT/VES)</div>
+                <div className="mono" style={{ fontSize: '1.1rem', fontWeight: 700 }}>{bin != null ? monto(bin, 'Bs') : '—'}</div>
+              </div>
+              <div>
+                <div className="muted" style={{ fontSize: '.68rem' }}>BCV</div>
+                <div className="mono" style={{ fontSize: '1.1rem', fontWeight: 700 }}>{bcv != null ? monto(bcv, 'Bs') : '—'}</div>
+              </div>
+              <div>
+                <div className="muted" style={{ fontSize: '.68rem' }}>MARGEN DE AHORRO (vs Binance)</div>
+                <div className="mono" style={{ fontSize: '1.1rem', fontWeight: 700, color: margen != null && margen > 0 ? 'var(--success)' : 'var(--muted)' }}>
+                  {margen != null ? `${margen.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} %` : '—'}
+                </div>
+              </div>
+            </div>
+            <div className="muted" style={{ fontSize: '.7rem', marginTop: '.4rem' }}>
+              El margen es cuánto se ahorra pagando a tasa BCV respecto a la de Binance: (Binance − BCV) ÷ Binance.
+            </div>
+          </div>
+        );
+      })()}
 
       {lotesDe && (
         <div className="card" style={{ marginBottom: '.6rem' }}>
@@ -397,7 +499,7 @@ function CajaDetalleModal({ caja, canWrite, actor, actorName, onClose, onChanged
             )}
             <div className="form-row">
               <label>Monto ({moneda})</label>
-              <input className="input mono" type="number" min={0} step="any" value={montoStr} onChange={(e) => setMontoStr(e.target.value)} placeholder="0,00" required />
+              <input className="input mono" type="number" min={0} step="any" value={montoStr} onChange={(e) => setMontoStr(dosDecimales(e.target.value))} placeholder="0,00" required />
             </div>
             {moneda !== 'Bs' && (
               <div className="form-row">
@@ -505,7 +607,7 @@ function GastoModal({ cajas, actor, actorName, onClose, onSaved }: {
           </div>
           <div className="form-row">
             <label>Monto</label>
-            <input className="input mono" type="number" min={0} step="any" value={montoStr} onChange={(e) => setMontoStr(e.target.value)} required />
+            <input className="input mono" type="number" min={0} step="any" value={montoStr} onChange={(e) => setMontoStr(dosDecimales(e.target.value))} required />
           </div>
         </div>
         <div className="form-row">
@@ -523,21 +625,58 @@ function TrasladoModal({ cajas, actor, actorName, onClose, onSaved }: {
 }) {
   const [origenId, setOrigenId] = useState(cajas[0]?.id ?? '');
   const [destinoId, setDestinoId] = useState('');
-  const [montoStr, setMontoStr] = useState('');
+  const [centros, setCentros] = useState<Caja[]>([]);
+  const [saldos, setSaldos] = useState<CajaSaldo[]>([]);
+  const [montos, setMontos] = useState<Record<string, string>>({}); // key = saldo.id
   const [motivo, setMotivo] = useState('');
+  const [loadingSaldos, setLoadingSaldos] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
   const origen = cajas.find((c) => c.id === origenId) ?? null;
-  // Solo cajas de la misma moneda como destino.
-  const destinos = cajas.filter((c) => c.id !== origenId && origen && c.moneda === origen.moneda);
+  const destino = centros.find((c) => c.id === destinoId) ?? null;
+
+  useEffect(() => { listCentrosAcopio().then(setCentros).catch(() => setCentros([])); }, []);
+  useEffect(() => {
+    if (!origenId) { setSaldos([]); return; }
+    setLoadingSaldos(true);
+    saldosDeCaja(origenId)
+      .then((s) => setSaldos(s.filter((x) => (Number(x.saldo) || 0) > 0)))
+      .catch(() => setSaldos([]))
+      .finally(() => setLoadingSaldos(false));
+    setMontos({});
+  }, [origenId]);
+
+  const cuentaLabel = (c: string) => c === 'general' ? '' : c === 'juridica' ? ' · Jurídica' : ' · Personal';
 
   async function submit(e: FormEvent) {
     e.preventDefault(); setError(null);
-    if (!origenId || !destinoId) { setError('Elegí caja origen y destino.'); return; }
+    if (!origenId || !destinoId) { setError('Elegí la caja origen y el centro de acopio.'); return; }
+    if (!motivo.trim()) { setError('El motivo es obligatorio.'); return; }
+    const legs = saldos
+      .map((s) => ({ cuenta: s.cuenta, moneda: s.moneda, monto: Number(montos[s.id]) || 0 }))
+      .filter((l) => l.monto > 0);
+    if (!legs.length) { setError('Indicá al menos un monto a trasladar.'); return; }
     setSaving(true);
     try {
-      await trasladoDinero({ origenId, destinoId, monto: Number(montoStr) || 0, motivo: motivo || null, actor, actorName });
-      notify('Traspaso de dinero registrado', 'success', { link: '#/app/tesoreria' });
+      await trasladoEntreCajasMulti({
+        origenId, destinoId, legs, motivo: motivo.trim(),
+        origenNombre: origen?.nombre, destinoNombre: destino?.nombre, actor, actorName,
+      });
+      // Centro de acopio EXTERNO (otro sistema/Supabase): además del traslado local,
+      // replicar la transferencia al otro sistema vía el puente inter-sistema.
+      if (destino?.externo && destino.empresa_codigo) {
+        const transferLegs: TransferLeg[] = saldos
+          .map((s) => ({ cuenta: s.cuenta, moneda: s.moneda, monto: Number(montos[s.id]) || 0, tasa_bs: s.tasa_prom ?? null }))
+          .filter((l) => l.monto > 0);
+        await crearTransferenciaSaliente({
+          empresaDestino: destino.empresa_codigo, cajaId: destinoId, cajaNombre: destino.nombre,
+          legs: transferLegs, motivo: motivo.trim(), actor, actorName,
+        });
+        notify(`Traslado a ${destino.nombre} registrado y enviado al otro sistema`, 'success', { link: '#/app/tesoreria' });
+      } else {
+        notify('Traslado a centro de acopio registrado', 'success', { link: '#/app/tesoreria' });
+      }
       onSaved();
     } catch (err) { setError(err instanceof Error ? err.message : 'No se pudo trasladar.'); setSaving(false); }
   }
@@ -552,24 +691,159 @@ function TrasladoModal({ cajas, actor, actorName, onClose, onSaved }: {
         <div className="form-grid">
           <div className="form-row">
             <label>Desde</label>
-            <select className="select" value={origenId} onChange={(e) => { setOrigenId(e.target.value); setDestinoId(''); }}>
+            <select className="select" value={origenId} onChange={(e) => { setOrigenId(e.target.value); setDestinoId(destinoId); }}>
               {cajas.map((c) => <option key={c.id} value={c.id}>{c.nombre} · {monto(c.saldo, c.moneda)}</option>)}
             </select>
           </div>
           <div className="form-row">
-            <label>Hacia (misma moneda)</label>
+            <label>Hacia (Centro de Acopio)</label>
             <select className="select" value={destinoId} onChange={(e) => setDestinoId(e.target.value)} required>
               <option value="">— elegir —</option>
-              {destinos.map((c) => <option key={c.id} value={c.id}>{c.nombre} · {monto(c.saldo, c.moneda)}</option>)}
+              {centros.map((c) => <option key={c.id} value={c.id}>{c.nombre}{c.externo ? ' · sistema externo' : ''}</option>)}
             </select>
+            {destino?.externo && (
+              <small className="muted">🔗 Centro de acopio en otro sistema: el traslado se replica automáticamente y queda “por confirmar” del otro lado.</small>
+            )}
           </div>
         </div>
-        <div className="form-grid">
-          <div className="form-row"><label>Monto</label><input className="input mono" type="number" min={0} step="any" value={montoStr} onChange={(e) => setMontoStr(e.target.value)} required /></div>
-          <div className="form-row"><label>Motivo (opcional)</label><input className="input" value={motivo} onChange={(e) => setMotivo(e.target.value)} /></div>
+
+        {/* Montos a sacar de cada moneda registrada en la caja origen */}
+        <div className="card" style={{ margin: '.4rem 0', padding: '.5rem .7rem' }}>
+          <div className="muted" style={{ fontSize: '.74rem', marginBottom: '.35rem' }}>¿Cuánto trasladar de cada moneda registrada en la caja?</div>
+          {loadingSaldos ? <div className="muted" style={{ fontSize: '.85rem' }}>Cargando saldos…</div>
+            : !saldos.length ? <div className="muted" style={{ fontSize: '.85rem' }}>Esta caja no tiene saldos.</div>
+            : (
+              <div style={{ display: 'grid', gap: '.4rem' }}>
+                {saldos.map((s) => (
+                  <div key={s.id} style={{ display: 'flex', gap: '.5rem', alignItems: 'center' }}>
+                    <span style={{ flex: '1 1 auto', fontSize: '.85rem' }}>
+                      <span className="badge">{s.moneda}</span>{cuentaLabel(s.cuenta)} <span className="muted">· disp. {monto(s.saldo, s.moneda)}</span>
+                    </span>
+                    <input className="input mono" type="number" min={0} max={Number(s.saldo) || 0} step="any" placeholder="0,00"
+                      value={montos[s.id] ?? ''} onChange={(e) => setMontos((m) => ({ ...m, [s.id]: dosDecimales(e.target.value) }))}
+                      style={{ width: 140 }} />
+                  </div>
+                ))}
+              </div>
+            )}
         </div>
+
+        <div className="form-row"><label>Motivo *</label><input className="input" value={motivo} onChange={(e) => setMotivo(e.target.value)} placeholder="Obligatorio" required /></div>
       </form>
     </Modal>
+  );
+}
+
+/* ───────────── Transferencias inter-sistema (centros de acopio externos) ───────────── */
+
+const ESTADO_TRANSFER: Record<string, { label: string; color: string }> = {
+  enviada: { label: 'En tránsito · esperando confirmación', color: 'var(--warning)' },
+  por_confirmar: { label: 'Por confirmar', color: 'var(--warning)' },
+  recibida: { label: 'Recibida ✓', color: 'var(--success)' },
+  rechazada: { label: 'Rechazada', color: 'var(--danger)' },
+  error: { label: 'Pendiente de entrega ⟳', color: 'var(--danger)' },
+};
+
+function TransferenciasInterPanel({ transfers, cajas, canWrite, actor, actorName, onChanged }: {
+  transfers: TransferenciaInter[]; cajas: Caja[]; canWrite: boolean; actor: string; actorName: string | null; onChanged: () => void | Promise<void>;
+}) {
+  const [sel, setSel] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const entrantes = transfers.filter((t) => t.direccion === 'entrante' && t.estado === 'por_confirmar');
+  const salientes = transfers.filter((t) => t.direccion === 'saliente');
+  const salientesVivas = salientes.filter((t) => t.estado !== 'recibida');
+  const recibidas = salientes.length - salientesVivas.length;
+  if (!entrantes.length && !salientes.length) return null;
+
+  async function confirmar(t: TransferenciaInter) {
+    const cajaId = t.caja_id || sel[t.id];
+    if (!cajaId) { toast('Elegí la caja que recibe el dinero.', 'error'); return; }
+    setBusy(t.id);
+    try {
+      await confirmarTransferenciaEntrante({ row: t, cajaId, actor, actorName });
+      toast(`Transferencia de ${t.empresa_origen} acreditada`, 'success');
+      await onChanged();
+    } catch (e) { toast(e instanceof Error ? e.message : 'No se pudo confirmar', 'error'); }
+    finally { setBusy(null); }
+  }
+
+  async function reintentar(t: TransferenciaInter) {
+    setBusy(t.id);
+    try {
+      await reintentarTransferencia(t);
+      toast('Reintento enviado al otro sistema', 'success');
+      await onChanged();
+    } catch (e) { toast(e instanceof Error ? e.message : 'Sigue sin poder entregarse', 'error'); }
+    finally { setBusy(null); }
+  }
+
+  return (
+    <div className="card" style={{ marginBottom: '1rem', borderColor: entrantes.length ? 'var(--brand, #ff8a00)' : undefined }}>
+      <div className="card-title" style={{ marginBottom: '.5rem' }}>
+        🔗 Transferencias inter-sistema (centros de acopio externos)
+      </div>
+
+      {/* ENTRANTES por confirmar */}
+      {entrantes.length > 0 && (
+        <div style={{ marginBottom: salientesVivas.length ? '.8rem' : 0 }}>
+          <div className="muted" style={{ fontSize: '.78rem', marginBottom: '.35rem' }}>Entrantes por confirmar · acreditá a la caja que recibe</div>
+          <div style={{ display: 'grid', gap: '.45rem' }}>
+            {entrantes.map((t) => (
+              <div key={t.id} className="card" style={{ margin: 0, padding: '.55rem .7rem', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '.5rem' }}>
+                <div style={{ flex: '1 1 240px', fontSize: '.85rem' }}>
+                  <strong>De {t.empresa_origen}</strong> · <span className="mono">{t.resumen}</span>
+                  {t.motivo ? <span className="muted"> · {t.motivo}</span> : null}
+                  <div className="muted" style={{ fontSize: '.72rem' }}>{dateTime(t.created_at)}</div>
+                </div>
+                {!t.caja_id && (
+                  <select className="select" value={sel[t.id] ?? ''} onChange={(e) => setSel((m) => ({ ...m, [t.id]: e.target.value }))} style={{ maxWidth: 200 }}>
+                    <option value="">— caja que recibe —</option>
+                    {cajas.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                  </select>
+                )}
+                {canWrite && (
+                  <button className="btn btn-sm btn-primary" disabled={busy === t.id} onClick={() => confirmar(t)}>
+                    {busy === t.id ? 'Confirmando…' : '✓ Confirmar recepción'}
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* SALIENTES en tránsito / con error */}
+      {salientesVivas.length > 0 && (
+        <div>
+          <div className="muted" style={{ fontSize: '.78rem', marginBottom: '.35rem' }}>Salientes (enviadas a otro sistema)</div>
+          <div style={{ display: 'grid', gap: '.4rem' }}>
+            {salientesVivas.map((t) => {
+              const est = ESTADO_TRANSFER[t.estado] ?? { label: t.estado, color: 'var(--muted)' };
+              return (
+                <div key={t.id} className="card" style={{ margin: 0, padding: '.5rem .7rem', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '.5rem' }}>
+                  <div style={{ flex: '1 1 240px', fontSize: '.84rem' }}>
+                    <strong>→ {t.empresa_destino}</strong> · <span className="mono">{t.resumen}</span>
+                    <div style={{ fontSize: '.72rem', color: est.color }}>{est.label}{t.mensaje_error ? ` · ${t.mensaje_error}` : ''}</div>
+                  </div>
+                  {canWrite && t.estado === 'error' && (
+                    <button className="btn btn-sm btn-ghost" disabled={busy === t.id} onClick={() => reintentar(t)}>
+                      {busy === t.id ? 'Reintentando…' : '⟳ Reintentar'}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {recibidas > 0 && (
+        <div className="muted" style={{ fontSize: '.72rem', marginTop: '.5rem' }}>
+          {recibidas} saliente(s) ya confirmada(s) por el otro sistema.
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -632,7 +906,7 @@ function PagoPersonalModal({ cajas, actor, actorName, onClose, onSaved }: {
                 <tr key={p.id}>
                   <td>{p.nombre} {p.apellido}</td>
                   <td className="muted">{p.cargo}</td>
-                  <td><input className="input mono" type="number" min={0} step="any" value={montos[p.id] ?? ''} onChange={(e) => setMontos((m) => ({ ...m, [p.id]: e.target.value }))} placeholder="0,00" /></td>
+                  <td><input className="input mono" type="number" min={0} step="any" value={montos[p.id] ?? ''} onChange={(e) => setMontos((m) => ({ ...m, [p.id]: dosDecimales(e.target.value) }))} placeholder="0,00" /></td>
                 </tr>
               ))}
             </tbody>
@@ -732,7 +1006,7 @@ function ConversorModal({ onClose }: { onClose: () => void }) {
         <div className="form-row">
           <label>Monto en {de}</label>
           <input className="input mono" type="number" min={0} step="any" value={montoStr}
-            onChange={(e) => setMontoStr(e.target.value)} placeholder="0,00" autoFocus />
+            onChange={(e) => setMontoStr(dosDecimales(e.target.value))} placeholder="0,00" autoFocus />
         </div>
         <div className="form-row">
           <label>Tasa · 1 {de} = ? {a}</label>
@@ -1060,7 +1334,7 @@ function CuentasCreditoModal({ cajas, actor, actorName, onClose, onChanged }: {
                             <td style={{ textAlign: 'right' }}>
                               <input className="input mono" type="number" min={0} max={Number(s.saldo)} step="any"
                                 value={legMontos[s.id] ?? ''} placeholder="0,00"
-                                onChange={(e) => setLegMontos((m) => ({ ...m, [s.id]: e.target.value }))}
+                                onChange={(e) => setLegMontos((m) => ({ ...m, [s.id]: dosDecimales(e.target.value) }))}
                                 style={{ width: 130, textAlign: 'right', borderColor: excede ? 'var(--danger)' : undefined }} />
                             </td>
                             <td className="mono" style={{ textAlign: 'right' }}>{n > 0 ? monto(legUsd(s.moneda, n), 'USD') : '—'}</td>
@@ -1123,6 +1397,7 @@ function PagarOrdenModal({ row, cajas, actor, actorName, onClose, onPaid }: {
   const [cajaId, setCajaId] = useState(cajas[0]?.id ?? '');
   const [montoStr, setMontoStr] = useState(String(baseUsd));
   const [factura, setFactura] = useState<File | null>(null);
+  const [motivoPago, setMotivoPago] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const caja = cajas.find((c) => c.id === cajaId) ?? null;
@@ -1213,14 +1488,14 @@ function PagarOrdenModal({ row, cajas, actor, actorName, onClose, onPaid }: {
           .filter((l) => l.monto > 0);
         if (!legs.length) { setError('Indicá cuánto pagar en al menos una moneda.'); setSaving(false); return; }
         if (!cubreTotalMulti) { setError(`Lo cargado (${monto(sumUsdMulti, 'USD')}) no cubre el total (${monto(totalUsd, 'USD')}).`); setSaving(false); return; }
-        await pagarOrdenCompraMulti({ orden: o, cajaId, legs, factura, actorEmail: actor, actorName });
+        await pagarOrdenCompraMulti({ orden: o, cajaId, legs, factura, motivoPago: motivoPago || null, actorEmail: actor, actorName });
         notify(`OC ${o.oc_codigo ?? o.codigo} pagada · multipago ${monto(sumUsdMulti, 'USD')}`, 'success', { link: '#/app/tesoreria' });
         onPaid();
         return;
       }
       await pagarOrdenCompra({
         orden: o, cajaId, monto: Number(montoStr) || 0,
-        factura, actorEmail: actor, actorName,
+        factura, motivoPago: motivoPago || null, actorEmail: actor, actorName,
       });
       notify(`OC ${o.oc_codigo ?? o.codigo} pagada · ${monto(Number(montoStr) || 0, moneda)}`, 'success', { link: '#/app/tesoreria' });
       onPaid();
@@ -1275,9 +1550,14 @@ function PagarOrdenModal({ row, cajas, actor, actorName, onClose, onPaid }: {
           <div className="card" style={{ marginBottom: '.75rem' }}>
             <div className="card-title" style={{ marginBottom: '.4rem' }}>Método de pago indicado{comprobanteOpcional ? ' · efectivo (sin comprobante)' : ''}</div>
             {o.metodo_pago.map((m, i) => (
-              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '.85rem', padding: '.15rem 0' }}>
-                <span>{labelMetodoPago(m.metodo)}</span>
-                <strong className="mono">{m.monto > 0 ? monto(m.monto, m.moneda) : m.moneda}</strong>
+              <div key={i} style={{ padding: '.15rem 0' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '.85rem' }}>
+                  <span>{labelMetodoPago(m.metodo)}</span>
+                  <strong className="mono">{m.monto > 0 ? monto(m.monto, m.moneda) : m.moneda}</strong>
+                </div>
+                {m.datos && Object.keys(m.datos).length > 0 && (
+                  <div className="muted" style={{ fontSize: '.74rem', paddingLeft: '.3rem' }}>↳ {resumenDatosPago(m.metodo, m.datos)}</div>
+                )}
               </div>
             ))}
           </div>
@@ -1353,7 +1633,7 @@ function PagarOrdenModal({ row, cajas, actor, actorName, onClose, onPaid }: {
           {!esMultimoneda && (
             <div className="form-row">
               <label>Monto a pagar ({moneda})</label>
-              <input className="input mono" type="number" min={0} step="any" value={montoStr} onChange={(e) => setMontoStr(e.target.value)} required={!esMultimoneda} />
+              <input className="input mono" type="number" min={0} step="any" value={montoStr} onChange={(e) => setMontoStr(dosDecimales(e.target.value))} required={!esMultimoneda} />
               {tasa > 0 && montoNum > 0 && (
                 <small className="muted">
                   Equivale a <strong className="mono">{monto(equivOtra, moneda === 'Bs' ? 'USD' : 'Bs')}</strong>
@@ -1386,7 +1666,7 @@ function PagarOrdenModal({ row, cajas, actor, actorName, onClose, onPaid }: {
                         <td style={{ textAlign: 'right' }}>
                           <input className="input mono" type="number" min={0} max={Number(s.saldo)} step="any"
                             value={legMontos[s.id] ?? ''} placeholder="0,00"
-                            onChange={(e) => setLegMontos((m) => ({ ...m, [s.id]: e.target.value }))}
+                            onChange={(e) => setLegMontos((m) => ({ ...m, [s.id]: dosDecimales(e.target.value) }))}
                             style={{ width: 130, textAlign: 'right', borderColor: excede ? 'var(--danger)' : undefined }} />
                         </td>
                         <td className="mono" style={{ textAlign: 'right' }}>{n > 0 ? monto(legUsd(s.moneda, n), 'USD') : '—'}</td>
@@ -1417,6 +1697,11 @@ function PagarOrdenModal({ row, cajas, actor, actorName, onClose, onPaid }: {
             <input className="input" type="file" accept="application/pdf,image/*" onChange={(e) => setFactura(e.target.files?.[0] ?? null)} required={!comprobanteOpcional} />
             {factura && <small className="muted">{factura.name}</small>}
             {comprobanteOpcional && <small className="muted">Pago en efectivo: el comprobante no es obligatorio.</small>}
+          </div>
+          <div className="form-row">
+            <label>Motivo del pago</label>
+            <input className="input" value={motivoPago} onChange={(e) => setMotivoPago(e.target.value)} placeholder="Nota del pago (opcional)" />
+            <small className="muted">Se suma al motivo de la OP en el registro de movimientos.</small>
           </div>
         </div>
       </form>

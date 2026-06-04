@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { money, num } from '@/shared/lib/format';
 import { toast } from '@/shared/ui/Toast';
 import { notify } from '@/shared/lib/notify';
+import { useRealtime } from '@/shared/lib/useRealtime';
 import { ConfirmDialog } from '@/shared/ui/Modal';
 import { EmptyState } from '@/shared/ui/EmptyState';
 import { useSession } from '@/modules/auth/authStore';
@@ -133,6 +134,9 @@ export function InventarioPage() {
     if (!gestionCatsOpen) return;
     contarProductosPorCategoria().then(setConteoCats).catch(() => setConteoCats({}));
   }, [gestionCatsOpen, productos]);
+
+  // Realtime multiusuario: el stock y las recepciones se reflejan al instante.
+  useRealtime(['productos', 'movimientos'], () => { void reload(); });
 
   async function handleFileImport(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];

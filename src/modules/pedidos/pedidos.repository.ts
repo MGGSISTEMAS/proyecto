@@ -1,6 +1,7 @@
 import { supabase } from '@/shared/lib/supabase';
 import { pagarOrden } from '@/modules/tesoreria/tesoreria.repository';
 import { egresarDivisa } from '@/modules/tesoreria/cajaSaldos.repository';
+import { guardarDatosPago, requiereDatos, type DatosPago } from './datosPago.repository';
 import type {
   AbonoCredito,
   CuentaCaja,
@@ -299,9 +300,15 @@ export async function indicarMetodoPago(
   const esContraEntregaRecibida = o.estado === 'recibida' && o.condiciones_pago === 'contra_entrega';
   if (o.estado !== 'confirmada_metodo' && !esContraEntregaRecibida)
     throw new Error('La OC debe estar en "Confirmada (indicar método de pago)".');
-  // El monto lo define Tesorería al pagar; acá solo se registran método(s) y moneda(s).
+  // El monto lo define Tesorería al pagar; acá solo se registran método(s), moneda(s)
+  // y los datos del proveedor para pagarle (pago móvil / transferencia / zelle / binance).
   const limpios = (metodos ?? [])
-    .map((m) => ({ metodo: m.metodo, moneda: m.moneda, monto: Math.round((Number(m.monto) || 0) * 100) / 100 }))
+    .map((m) => ({
+      metodo: m.metodo,
+      moneda: m.moneda,
+      monto: Math.round((Number(m.monto) || 0) * 100) / 100,
+      ...(m.datos && Object.keys(m.datos).length ? { datos: m.datos } : {}),
+    }))
     .filter((m) => m.metodo && m.moneda);
   if (!limpios.length) throw new Error('Indicá al menos un método de pago.');
   const patch = {
@@ -313,6 +320,15 @@ export async function indicarMetodoPago(
   };
   const { data, error } = await supabase.from(TABLE).update(patch).eq('id', o.id).select('*').single();
   if (error) throw error;
+
+  // Guardar/actualizar los datos de pago del proveedor para reutilizarlos en próximas compras.
+  if (o.proveedor_id) {
+    for (const m of limpios) {
+      if (requiereDatos(m.metodo) && 'datos' in m && m.datos) {
+        try { await guardarDatosPago(o.proveedor_id, m.metodo, m.datos as DatosPago, actorEmail); } catch { /* no bloquea el flujo */ }
+      }
+    }
+  }
   return data as Orden;
 }
 
@@ -503,8 +519,18 @@ export interface PagarOcInput {
   monto: number;
   factura?: File | null;
   retencion?: File | null;
+  motivoPago?: string | null;
   actorEmail: string;
   actorName?: string | null;
+}
+
+/** Concepto del egreso de una OC: incluye el motivo de la OP y el del pago. */
+function conceptoPagoOc(o: Orden, motivoPago?: string | null, sufijo?: string): string {
+  const extra = [
+    o.notas?.trim() ? `motivo OP: ${o.notas.trim()}` : '',
+    motivoPago?.trim() ? `pago: ${motivoPago.trim()}` : '',
+  ].filter(Boolean).join(' · ');
+  return `Pago OC ${o.oc_codigo ?? o.codigo}${extra ? ` · ${extra}` : ''}${sufijo ? ` · ${sufijo}` : ''}`;
 }
 
 /**
@@ -523,7 +549,7 @@ export async function pagarOrdenCompra(input: PagarOcInput): Promise<Orden> {
   // 1) Egreso en Tesorería (valida saldo) casado con la orden → aparece en Libro Mayor.
   const mov = await pagarOrden({
     cajaId: input.cajaId, ordenId: o.id, monto,
-    concepto: `Pago OC ${o.oc_codigo ?? o.codigo}`,
+    concepto: conceptoPagoOc(o, input.motivoPago),
     actor: input.actorEmail, actorName: input.actorName ?? null,
   });
 
@@ -560,6 +586,7 @@ export interface PagarOcMultiInput {
   cajaId: string;
   legs: PagarOcMultiLeg[];
   factura?: File | null;
+  motivoPago?: string | null;
   actorEmail: string;
   actorName?: string | null;
 }
@@ -583,7 +610,7 @@ export async function pagarOrdenCompraMulti(input: PagarOcMultiInput): Promise<O
   for (const leg of legs) {
     const mov = await egresarDivisa({
       cajaId: input.cajaId, cuenta: leg.cuenta, moneda: leg.moneda, monto: leg.monto,
-      concepto: `Pago OC ${o.oc_codigo ?? o.codigo} · ${leg.moneda}`, categoria: 'pago_oc', refOrdenId: o.id,
+      concepto: conceptoPagoOc(o, input.motivoPago, leg.moneda), categoria: 'pago_oc', refOrdenId: o.id,
       actor: input.actorEmail, actorName: input.actorName ?? null,
     });
     movIds.push(mov.id);
