@@ -294,6 +294,7 @@ export async function indicarMetodoPago(
   o: Orden,
   metodos: PagoMetodo[],
   actorEmail: string,
+  soporte?: { comprobanteTipo: 'nota_entrega' | 'factura'; retencionModo?: 'se_paga_despues' | 'completo_reembolso' | null },
 ): Promise<Orden> {
   // Flujo normal: confirmada_metodo → oc_aprobada. Contra entrega: tras recibir
   // (recibida) se indica el método para pagar SOLO lo recibido → oc_aprobada.
@@ -311,12 +312,19 @@ export async function indicarMetodoPago(
     }))
     .filter((m) => m.metodo && m.moneda);
   if (!limpios.length) throw new Error('Indicá al menos un método de pago.');
+  // Soporte: Nota de entrega → directo a Tesorería (como hoy). Factura → además
+  // entra a Retenciones (se marca el tipo y el modo de retención). En ambos casos
+  // la OC queda "Confirmada pagar" (oc_aprobada) para que Tesorería pague.
+  const comprobanteTipo = soporte?.comprobanteTipo ?? null;
+  const retencionModo = comprobanteTipo === 'factura' ? (soporte?.retencionModo ?? null) : null;
   const patch = {
     estado: 'oc_aprobada' as EstadoOrden,
     metodo_pago: limpios,
     metodo_pago_por: actorEmail,
     metodo_pago_en: new Date().toISOString(),
-    historial: appendHistorial(o, 'metodo_pago', actorEmail, { metodos: limpios }),
+    comprobante_tipo: comprobanteTipo,
+    retencion_modo: retencionModo,
+    historial: appendHistorial(o, 'metodo_pago', actorEmail, { metodos: limpios, comprobante: comprobanteTipo, retencion_modo: retencionModo }),
   };
   const { data, error } = await supabase.from(TABLE).update(patch).eq('id', o.id).select('*').single();
   if (error) throw error;
@@ -568,6 +576,8 @@ export async function pagarOrdenCompra(input: PagarOcInput): Promise<Orden> {
     caja_mov_id: mov.id,
     factura_path: facturaPath, factura_nombre: facturaNombre,
     retencion_path: retencionPath, retencion_nombre: retencionNombre,
+    // Si la OC es por Factura, al pagar se marca automáticamente en Retenciones.
+    ...(o.comprobante_tipo === 'factura' ? { retencion_pagada: true, retencion_pagada_en: new Date().toISOString() } : {}),
     historial: appendHistorial(o, 'pagada', input.actorEmail, { oc_codigo: o.oc_codigo, monto }),
   };
   const { data, error } = await supabase.from(TABLE).update(patch).eq('id', o.id).select('*').single();
@@ -626,6 +636,7 @@ export async function pagarOrdenCompraMulti(input: PagarOcMultiInput): Promise<O
     caja_id: input.cajaId,
     caja_mov_id: movIds[0] ?? null,
     factura_path: facturaPath, factura_nombre: facturaNombre,
+    ...(o.comprobante_tipo === 'factura' ? { retencion_pagada: true, retencion_pagada_en: new Date().toISOString() } : {}),
     historial: appendHistorial(o, 'pagada', input.actorEmail, {
       oc_codigo: o.oc_codigo,
       multipago: legs.map((l) => ({ moneda: l.moneda, cuenta: l.cuenta, monto: l.monto })),

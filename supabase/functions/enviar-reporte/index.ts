@@ -25,10 +25,10 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
-  let payload: { pdf_base64?: string; nombre_archivo?: string; asunto?: string; mensaje?: string; to_email?: string };
+  let payload: { pdf_base64?: string; nombre_archivo?: string; asunto?: string; mensaje?: string; to_email?: string; to_emails?: string[] };
   try { payload = await req.json(); } catch { return json({ error: 'Body JSON inválido' }, 400); }
 
-  const { pdf_base64, nombre_archivo, asunto, mensaje, to_email } = payload;
+  const { pdf_base64, nombre_archivo, asunto, mensaje, to_email, to_emails } = payload;
   if (!pdf_base64) return json({ error: 'pdf_base64 es requerido' }, 400);
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
@@ -42,12 +42,16 @@ Deno.serve(async (req) => {
 
   const supabase = createClient(supabaseUrl, serviceKey);
 
+  const rx = /\S+@\S+\.\S+/;
+  const lista = Array.isArray(to_emails) ? to_emails.filter((e) => typeof e === 'string' && rx.test(e)) : [];
   let destinatarios: string[];
-  if (to_email && /\S+@\S+\.\S+/.test(to_email)) {
+  if (lista.length) {
+    destinatarios = [...new Set(lista.map((e) => e.trim().toLowerCase()))];
+  } else if (to_email && rx.test(to_email)) {
     destinatarios = [to_email];
   } else {
     const { data: admins } = await supabase.from('usuarios').select('email').in('role', ['admin', 'jefe']);
-    destinatarios = (admins ?? []).map((a: { email: string }) => a.email).filter((e: string) => !!e && /\S+@\S+\.\S+/.test(e));
+    destinatarios = (admins ?? []).map((a: { email: string }) => a.email).filter((e: string) => !!e && rx.test(e));
   }
   if (!destinatarios.length) return json({ error: 'No hay destinatarios (configurá un admin/jefe o pasá to_email).' }, 400);
 

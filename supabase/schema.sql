@@ -757,6 +757,21 @@ alter table public.ordenes add column if not exists factura_path    text;
 alter table public.ordenes add column if not exists factura_nombre  text;
 alter table public.ordenes add column if not exists retencion_path  text;
 alter table public.ordenes add column if not exists retencion_nombre text;
+-- Módulo Retenciones: 3 comprobantes fiscales por OC (IVA / ISLR / Municipal) + estado.
+alter table public.ordenes add column if not exists retencion_iva_path        text;
+alter table public.ordenes add column if not exists retencion_iva_nombre      text;
+alter table public.ordenes add column if not exists retencion_islr_path       text;
+alter table public.ordenes add column if not exists retencion_islr_nombre     text;
+alter table public.ordenes add column if not exists retencion_municipal_path  text;
+alter table public.ordenes add column if not exists retencion_municipal_nombre text;
+alter table public.ordenes add column if not exists retencion_finalizada      boolean not null default false;
+alter table public.ordenes add column if not exists retencion_finalizada_por  text;
+alter table public.ordenes add column if not exists retencion_finalizada_en   timestamptz;
+-- Soporte elegido al indicar método de pago + modo de retención + marca de pago Tesorería.
+alter table public.ordenes add column if not exists comprobante_tipo    text;   -- 'nota_entrega' | 'factura'
+alter table public.ordenes add column if not exists retencion_modo      text;   -- 'se_paga_despues' | 'completo_reembolso'
+alter table public.ordenes add column if not exists retencion_pagada    boolean not null default false;
+alter table public.ordenes add column if not exists retencion_pagada_en timestamptz;
 -- Storage: bucket privado `compras-oc` para la factura adjunta al pago de la OC
 -- (políticas: lectura/escritura para usuarios autenticados, espejo de `compras-directas`).
 -- movimientos_caja: categoría 'pago_oc' (ref_orden_id) casa el pago con la orden.
@@ -928,7 +943,7 @@ end$$;
 do $$
 declare t text;
 begin
-  for t in select unnest(array['movimientos', 'productos', 'existencias', 'produccion', 'produccion_materiales', 'hornos', 'cajas', 'movimientos_caja']) loop
+  for t in select unnest(array['movimientos', 'productos', 'existencias', 'almacenes', 'produccion', 'produccion_materiales', 'hornos', 'cajas', 'movimientos_caja']) loop
     execute format('drop policy if exists "%I write admin" on public.%I', t, t);
     execute format('drop policy if exists "%I write staff" on public.%I', t, t);
     execute format('drop policy if exists "%I write operativo" on public.%I', t, t);

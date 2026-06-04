@@ -492,6 +492,20 @@ export interface Orden {
   factura_nombre?: string | null;
   retencion_path?: string | null;
   retencion_nombre?: string | null;
+  /** Retenciones fiscales (módulo Retenciones): comprobantes por tipo + estado. */
+  comprobante_tipo?: 'nota_entrega' | 'factura' | null;
+  retencion_modo?: 'se_paga_despues' | 'completo_reembolso' | null;
+  retencion_iva_path?: string | null;
+  retencion_iva_nombre?: string | null;
+  retencion_islr_path?: string | null;
+  retencion_islr_nombre?: string | null;
+  retencion_municipal_path?: string | null;
+  retencion_municipal_nombre?: string | null;
+  retencion_finalizada?: boolean | null;
+  retencion_finalizada_por?: string | null;
+  retencion_finalizada_en?: string | null;
+  retencion_pagada?: boolean | null;
+  retencion_pagada_en?: string | null;
   /** Recepción (parcial): total realmente recibido + nota de diferencias. */
   recibido_total?: number | null;
   nota_recepcion?: string | null;

@@ -45,7 +45,26 @@ async function leerSnapshot(): Promise<TasaHoy | null> {
  * traerla (cache on-demand: el primer acceso del día la actualiza). Si la
  * API falla, cae a la última tasa conocida para no romper el navbar.
  */
+/* ── Cache TTL en memoria para lecturas repetidas (tasa del día / mercado) ──
+   Estas dos se piden en casi todos los modales de Tesorería/Compras (conversor,
+   pagar, traslado, detalle de caja, compra directa…). Como las tasas cambian
+   ~2×/día, un cache corto evita decenas de lecturas/Edge calls al abrir cada
+   modal. Los botones "↻ Actualizar" lo invalidan con bustTasasCache(). */
+const TASAS_TTL_MS = 60_000;
+let _tasaHoyCache: { at: number; val: TasaHoy } | null = null;
+let _mercadoCache: { at: number; val: TasasMercado } | null = null;
+
+/** Invalida el cache en memoria de tasas (lo llaman las funciones de refresco). */
+export function bustTasasCache(): void { _tasaHoyCache = null; _mercadoCache = null; }
+
 export async function getTasaHoy(): Promise<TasaHoy> {
+  if (_tasaHoyCache && Date.now() - _tasaHoyCache.at < TASAS_TTL_MS) return _tasaHoyCache.val;
+  const val = await _resolverTasaHoy();
+  _tasaHoyCache = { at: Date.now(), val };
+  return val;
+}
+
+async function _resolverTasaHoy(): Promise<TasaHoy> {
   const hoy = hoyVE();
   const snap = await leerSnapshot();
   if (snap && snap.fecha === hoy && snap.usd != null) return snap;
@@ -69,6 +88,7 @@ export async function refrescarTasa(): Promise<TasaHoy> {
   >('tasa-bcv', { body: { force: true } });
   if (error) throw new Error(error.message ?? 'No se pudo actualizar la tasa');
   if (!data || 'error' in data) throw new Error((data as { error?: string })?.error || 'Respuesta inválida');
+  bustTasasCache();
   return { usd: data.usd, eur: data.eur ?? null, fecha: data.fecha };
 }
 
@@ -169,6 +189,7 @@ export async function refrescarBinanceP2P(): Promise<Binance3> {
   >('tasa-binance-p2p', { body: {} });
   if (error) throw new Error(error.message ?? 'No se pudo actualizar la tasa Binance');
   if (!data || 'error' in data) throw new Error((data as { error?: string })?.error || 'Respuesta inválida');
+  bustTasasCache();
   return { buy: data.buy ?? null, sell: data.sell ?? null, promedio: data.promedio ?? null, at: data.at };
 }
 
@@ -195,6 +216,7 @@ export async function refrescarCop(): Promise<number> {
   >('tasa-cop', { body: {} });
   if (error) throw new Error(error.message ?? 'No se pudo actualizar la tasa COP');
   if (!data || 'error' in data) throw new Error((data as { error?: string })?.error || 'Respuesta inválida');
+  bustTasasCache();
   return data.cop_usd;
 }
 
@@ -203,6 +225,13 @@ export async function refrescarCop(): Promise<number> {
  * Lee lo último de BD; si USDT no está cargado hoy, intenta el Edge Function.
  */
 export async function getTasasMercado(): Promise<TasasMercado> {
+  if (_mercadoCache && Date.now() - _mercadoCache.at < TASAS_TTL_MS) return _mercadoCache.val;
+  const val = await _resolverTasasMercado();
+  _mercadoCache = { at: Date.now(), val };
+  return val;
+}
+
+async function _resolverTasasMercado(): Promise<TasasMercado> {
   const [bcv, usdt, cop] = await Promise.all([
     getTasaHoy().catch(() => ({ usd: null, eur: null, fecha: null } as TasaHoy)),
     ultimaTasaMoneda('USDT'),

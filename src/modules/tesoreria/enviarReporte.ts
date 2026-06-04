@@ -5,15 +5,18 @@ import type { MovimientoCaja } from '@/shared/lib/types';
 const FUNCTION_SLUG = 'enviar-reporte';
 
 /**
- * Genera el reporte PDF en el navegador y lo envía por correo vía la Edge
- * Function `enviar-reporte` (Brevo). Si no se pasa `toEmail`, va a admin/jefe.
+ * Genera el reporte PDF en el navegador (una sola vez) y lo envía por correo vía
+ * la Edge Function `enviar-reporte` (Brevo). `destinos` puede ser una lista de
+ * correos (como en el envío de las OC) o un único string; si no se pasa, va a
+ * admin/jefe.
  */
 export async function enviarReportePorCorreo(
   movs: MovimientoCaja[],
   meta: ReporteMeta,
-  toEmail?: string,
+  destinos?: string[] | string,
 ): Promise<{ destinatarios: string[] }> {
   const { base64, nombre } = await obtenerReporteBase64(movs, meta);
+  const lista = Array.isArray(destinos) ? destinos : destinos ? [destinos] : [];
   const { data, error } = await supabase.functions.invoke<
     { ok: true; destinatarios: string[] } | { error: string }
   >(FUNCTION_SLUG, {
@@ -22,7 +25,7 @@ export async function enviarReportePorCorreo(
       nombre_archivo: nombre,
       asunto: meta.titulo + (meta.subtitulo ? ` · ${meta.subtitulo}` : ''),
       mensaje: meta.subtitulo ?? '',
-      to_email: toEmail,
+      to_emails: lista,
     },
   });
   if (error) throw new Error(error.message ?? 'No se pudo enviar el correo');

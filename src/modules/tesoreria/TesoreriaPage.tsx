@@ -33,7 +33,8 @@ import {
 } from '@/modules/pedidos/pedidos.repository';
 import { labelCondicionPago } from '@/modules/pedidos/ofertas.repository';
 import { resumenDatosPago } from '@/shared/ui/DatosPagoFields';
-import { descargarReportePdf } from './reportePdf';
+import { comprobantesDeOrden, urlRetencion, labelRetencionModo } from '@/modules/retenciones/retenciones.repository';
+import { descargarReportePdf, type ReporteMeta } from './reportePdf';
 import { enviarReportePorCorreo } from './enviarReporte';
 import type { AbonoCredito } from '@/shared/lib/types';
 import { descargarOrdenCompraPdf } from '@/modules/pedidos/ordenCompraPdf';
@@ -71,6 +72,7 @@ export function TesoreriaPage() {
   const [porPagarCount, setPorPagarCount] = useState(0);
   const [creditosCount, setCreditosCount] = useState(0);
   const [vista, setVista] = useState<'tesoreria' | 'tasas' | 'movimientos'>('tesoreria');
+  const [correoMovOpen, setCorreoMovOpen] = useState(false);
 
   // Filtros del registro de movimientos
   const [fMoneda, setFMoneda] = useState<string>('');
@@ -230,11 +232,7 @@ export function TesoreriaPage() {
               <button className="btn btn-sm btn-ghost" disabled={!libro.length} onClick={async () => {
                 try { await descargarReportePdf(libro, reporteMeta()); } catch (e) { toast(e instanceof Error ? e.message : 'No se pudo generar el PDF', 'error'); }
               }}>↓ PDF</button>
-              <button className="btn btn-sm btn-ghost" disabled={!libro.length} onClick={async () => {
-                const email = window.prompt('Correo destino (dejá vacío para enviar a los admin/jefe):', '') ?? undefined;
-                try { const r = await enviarReportePorCorreo(libro, reporteMeta(), email || undefined); toast(`Reporte enviado a: ${r.destinatarios.join(', ')}`, 'success'); }
-                catch (e) { toast(e instanceof Error ? e.message : 'No se pudo enviar el correo', 'error'); }
-              }}>✉ Enviar por correo</button>
+              <button className="btn btn-sm btn-ghost" disabled={!libro.length} onClick={() => setCorreoMovOpen(true)}>✉ Enviar por correo</button>
             </div>
             <div className="table-wrap">
               <table className="table" style={{ fontSize: '.85rem' }}>
@@ -264,6 +262,7 @@ export function TesoreriaPage() {
       </>
       )}
 
+      {correoMovOpen && <EnviarReporteModal movs={libro} meta={reporteMeta()} defaultEmail={actor} onClose={() => setCorreoMovOpen(false)} />}
       {modal === 'gasto' && <GastoModal cajas={cajas} actor={actor} actorName={actorName} onClose={() => setModal('none')} onSaved={cerrarYRecargar} />}
       {modal === 'traslado' && <TrasladoModal cajas={cajas} actor={actor} actorName={actorName} onClose={() => setModal('none')} onSaved={cerrarYRecargar} />}
       {modal === 'pago' && <PagoPersonalModal cajas={cajas} actor={actor} actorName={actorName} onClose={() => setModal('none')} onSaved={cerrarYRecargar} />}
@@ -301,6 +300,7 @@ function CajaDetalleModal({ caja, canWrite, actor, actorName, onClose, onChanged
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mercado, setMercado] = useState<TasasMercado | null>(null);
+  const [correoOpen, setCorreoOpen] = useState(false);
 
   // Sugerencia de tasa del día para la moneda elegida (Bs por 1 unidad).
   const tasaSugerida = moneda === 'Bs' || !mercado ? null : tasaCruzada(moneda as MonedaCaja, 'Bs', mercado);
@@ -376,11 +376,7 @@ function CajaDetalleModal({ caja, canWrite, actor, actorName, onClose, onChanged
             <button className="btn btn-sm btn-ghost" disabled={!movs.length} onClick={async () => {
               try { await descargarReportePdf(movs, { titulo: 'REPORTE DE CAJA', subtitulo: caja.nombre }); } catch (e) { toast(e instanceof Error ? e.message : 'No se pudo generar el PDF', 'error'); }
             }}>↓ PDF</button>
-            <button className="btn btn-sm btn-ghost" disabled={!movs.length} onClick={async () => {
-              const email = window.prompt('Correo destino (vacío = admin/jefe):', '') ?? undefined;
-              try { const r = await enviarReportePorCorreo(movs, { titulo: 'REPORTE DE CAJA', subtitulo: caja.nombre }, email || undefined); toast(`Enviado a: ${r.destinatarios.join(', ')}`, 'success'); }
-              catch (e) { toast(e instanceof Error ? e.message : 'No se pudo enviar', 'error'); }
-            }}>✉ Correo</button>
+            <button className="btn btn-sm btn-ghost" disabled={!movs.length} onClick={() => setCorreoOpen(true)}>✉ Correo</button>
           </span>
         </div>
         <div className="table-wrap">
@@ -463,6 +459,8 @@ function CajaDetalleModal({ caja, canWrite, actor, actorName, onClose, onChanged
           </div>
         </div>
       )}
+
+      {correoOpen && <EnviarReporteModal movs={movs} meta={{ titulo: 'REPORTE DE CAJA', subtitulo: caja.nombre }} defaultEmail={actor} onClose={() => setCorreoOpen(false)} />}
 
       {/* Ingresar dinero (cuenta jurídica/personal en Bs, o divisa con tasa) */}
       {canWrite && (
@@ -844,6 +842,59 @@ function TransferenciasInterPanel({ transfers, cajas, canWrite, actor, actorName
         </div>
       )}
     </div>
+  );
+}
+
+/* ───────── Enviar reporte por correo (mismo patrón que las OC) ───────── */
+function EnviarReporteModal({ movs, meta, defaultEmail, onClose }: {
+  movs: MovimientoCaja[]; meta: ReporteMeta; defaultEmail: string; onClose: () => void;
+}) {
+  const [incluirPropio, setIncluirPropio] = useState(true);
+  const [extra, setExtra] = useState('');
+  const [enviando, setEnviando] = useState(false);
+  const propio = defaultEmail.trim().toLowerCase();
+  const emailRx = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  async function handleEnviar() {
+    const lista: string[] = [];
+    if (incluirPropio && propio) lista.push(propio);
+    const extraClean = extra.trim().toLowerCase();
+    if (extraClean) {
+      if (!emailRx.test(extraClean)) { toast('El correo adicional no es válido', 'error'); return; }
+      lista.push(extraClean);
+    }
+    setEnviando(true);
+    try {
+      const r = await enviarReportePorCorreo(movs, meta, lista);
+      notify(`Reporte enviado a ${r.destinatarios.join(', ')}`, 'success', { link: '#/app/tesoreria' });
+      onClose();
+    } catch (e) { toast(e instanceof Error ? e.message : 'No se pudo enviar', 'error'); }
+    finally { setEnviando(false); }
+  }
+
+  return (
+    <Modal title={`Enviar reporte · ${meta.titulo}`} size="md" onClose={onClose} footer={
+      <>
+        <button className="btn btn-ghost" onClick={onClose} disabled={enviando}>Cancelar</button>
+        <button className="btn btn-primary" onClick={handleEnviar} disabled={enviando}>{enviando ? 'Enviando…' : '📧 Enviar'}</button>
+      </>
+    }>
+      <p className="muted" style={{ marginTop: 0, fontSize: '.88rem' }}>
+        Se enviará el PDF del reporte ({meta.subtitulo || 'todos los movimientos'}) a los destinatarios seleccionados.
+      </p>
+      <label style={{ display: 'flex', alignItems: 'center', gap: '.6rem', padding: '.7rem .85rem', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', background: incluirPropio ? 'rgba(255,138,0,0.06)' : 'transparent', cursor: propio ? 'pointer' : 'not-allowed', marginBottom: '.6rem' }}>
+        <input type="checkbox" checked={incluirPropio} disabled={!propio} onChange={(e) => setIncluirPropio(e.target.checked)} />
+        <div>
+          <div style={{ fontWeight: 600 }}>Tu correo</div>
+          <div className="mono" style={{ fontSize: '.82rem' }}>{propio || '—'}</div>
+        </div>
+      </label>
+      <div className="form-row" style={{ marginTop: '.4rem' }}>
+        <label>Correo adicional (opcional)</label>
+        <input className="input" type="email" value={extra} onChange={(e) => setExtra(e.target.value)} placeholder="otro@correo.com" maxLength={120} />
+        <small className="muted">Si no marcás ninguno, se envía a los admin/jefe.</small>
+      </div>
+    </Modal>
   );
 }
 
@@ -1560,6 +1611,29 @@ function PagarOrdenModal({ row, cajas, actor, actorName, onClose, onPaid }: {
                 )}
               </div>
             ))}
+          </div>
+        )}
+
+        {/* Soporte / Retención: tipo y comprobantes (descarga) — reflejo del módulo Retenciones */}
+        {o.comprobante_tipo && (
+          <div className="card" style={{ marginBottom: '.75rem' }}>
+            <div className="card-title" style={{ marginBottom: '.4rem' }}>Soporte / Retención</div>
+            <div style={{ fontSize: '.85rem' }}>
+              Soporte: <strong>{o.comprobante_tipo === 'factura' ? 'Factura' : 'Nota de entrega'}</strong>
+              {o.comprobante_tipo === 'factura' && <> · Retención: <strong>{labelRetencionModo(o.retencion_modo)}</strong>{o.retencion_pagada ? <span className="badge" style={{ marginLeft: '.4rem', color: 'var(--success)' }}>✓ pagada</span> : null}</>}
+            </div>
+            {comprobantesDeOrden(o).length > 0 ? (
+              <div style={{ display: 'grid', gap: '.3rem', marginTop: '.4rem' }}>
+                {comprobantesDeOrden(o).map((c) => (
+                  <div key={c.tipo} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '.5rem', fontSize: '.82rem' }}>
+                    <span><span className="badge">{c.label}</span> <span className="muted">{c.nombre}</span></span>
+                    <button type="button" className="btn btn-sm btn-ghost" onClick={() => urlRetencion(c.path).then((u) => window.open(u, '_blank', 'noopener')).catch(() => toast('No se pudo abrir el comprobante', 'error'))}>📎 Descargar</button>
+                  </div>
+                ))}
+              </div>
+            ) : o.comprobante_tipo === 'factura' ? (
+              <div className="muted" style={{ fontSize: '.78rem', marginTop: '.3rem' }}>Retención aún no cargada en el módulo Retenciones.</div>
+            ) : null}
           </div>
         )}
 

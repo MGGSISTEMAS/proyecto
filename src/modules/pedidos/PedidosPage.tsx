@@ -622,10 +622,11 @@ export function PedidosPage() {
         <MetodoPagoModal
           orden={modal.orden}
           onClose={() => setModal({ kind: 'none' })}
-          onSent={async (metodos) => {
+          onSent={async (metodos, soporte) => {
             try {
-              await indicarMetodoPago(modal.orden, metodos, usuario?.email ?? user?.email ?? 'sistema');
-              notify(`OC ${modal.orden.oc_codigo ?? modal.orden.codigo} enviada para pagar · disponible en Tesorería`, 'success', { link: '#/app/tesoreria' });
+              await indicarMetodoPago(modal.orden, metodos, usuario?.email ?? user?.email ?? 'sistema', soporte);
+              const extra = soporte.comprobanteTipo === 'factura' ? ' · enviada también a Retenciones' : '';
+              notify(`OC ${modal.orden.oc_codigo ?? modal.orden.codigo} enviada para pagar · disponible en Tesorería${extra}`, 'success', { link: '#/app/tesoreria' });
               setModal({ kind: 'none' });
               await refresh();
             } catch (e) {
@@ -845,11 +846,36 @@ function FinalizarPedidoModal({
   onConfirm: (data: { calidad: number; puntualidadDias: number; comentario: string }) => Promise<void>;
 }) {
   const [calidad, setCalidad] = useState(5);
-  const [puntualidad, setPuntualidad] = useState<'en_fecha' | 'adelantado' | 'atrasado'>('en_fecha');
+  const [puntualidad, setPuntualidad] = useState<'por_fecha' | 'en_fecha' | 'adelantado' | 'atrasado'>('por_fecha');
   const [dias, setDias] = useState('1');
   const [comentario, setComentario] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Fecha prometida (de la oferta elegida) vs fecha de recibido → calcula los días.
+  const hoyISO = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Caracas' }).format(new Date());
+  const [fechaPrometida, setFechaPrometida] = useState('');
+  const [fechaRecibido, setFechaRecibido] = useState(hoyISO);
+  useEffect(() => {
+    listOfertasByOrden(orden.id)
+      .then((ofs) => {
+        // La oferta elegida es la que casó con el proveedor de la orden (aceptada).
+        const elegida = ofs.find((o) => o.estado === 'aceptada' && o.proveedor_id === orden.proveedor_id)
+          ?? ofs.find((o) => o.proveedor_id === orden.proveedor_id)
+          ?? ofs.find((o) => o.fecha_entrega_prometida);
+        if (elegida?.fecha_entrega_prometida) setFechaPrometida(elegida.fecha_entrega_prometida.slice(0, 10));
+      })
+      .catch(() => { /* sin oferta: el usuario coloca la fecha prometida a mano */ });
+  }, [orden.id, orden.proveedor_id]);
+
+  // Días (firmado): + adelantado (recibido antes de lo prometido), − atrasado.
+  const diasPorFecha = (() => {
+    if (!fechaPrometida || !fechaRecibido) return null;
+    const p = new Date(`${fechaPrometida}T00:00:00`).getTime();
+    const r = new Date(`${fechaRecibido}T00:00:00`).getTime();
+    if (isNaN(p) || isNaN(r)) return null;
+    return Math.round((p - r) / 86_400_000);
+  })();
 
   const CALIDAD_LABEL: Record<number, string> = {
     5: '5 · Excelente', 4: '4 · Buena', 3: '3 · Aceptable', 2: '2 · Deficiente', 1: '1 · Muy mala',
@@ -857,8 +883,14 @@ function FinalizarPedidoModal({
 
   async function handle() {
     setError(null);
-    const d = Math.max(0, Math.floor(Number(dias) || 0));
-    const puntualidadDias = puntualidad === 'en_fecha' ? 0 : puntualidad === 'adelantado' ? d : -d;
+    let puntualidadDias: number;
+    if (puntualidad === 'por_fecha') {
+      if (diasPorFecha == null) { setError('Indicá la fecha prometida y la de recibido.'); return; }
+      puntualidadDias = diasPorFecha;
+    } else {
+      const d = Math.max(0, Math.floor(Number(dias) || 0));
+      puntualidadDias = puntualidad === 'en_fecha' ? 0 : puntualidad === 'adelantado' ? d : -d;
+    }
     setSaving(true);
     try {
       await onConfirm({ calidad, puntualidadDias, comentario: comentario.trim() });
@@ -901,18 +933,46 @@ function FinalizarPedidoModal({
         <div className="form-row">
           <label>Puntualidad *</label>
           <select className="select" value={puntualidad} onChange={(e) => setPuntualidad(e.target.value as typeof puntualidad)}>
+            <option value="por_fecha">Por fecha prometida</option>
             <option value="en_fecha">En la fecha prometida</option>
             <option value="adelantado">Adelantado</option>
             <option value="atrasado">Atrasado</option>
           </select>
         </div>
-        {puntualidad !== 'en_fecha' && (
+        {(puntualidad === 'adelantado' || puntualidad === 'atrasado') && (
           <div className="form-row">
             <label>Días {puntualidad === 'adelantado' ? 'de adelanto' : 'de atraso'}</label>
             <input className="input mono" type="number" min={0} step={1} value={dias} onChange={(e) => setDias(e.target.value)} />
           </div>
         )}
       </div>
+
+      {/* Por fecha prometida: fecha de la oferta vs. fecha de recibido → calcula los días */}
+      {puntualidad === 'por_fecha' && (
+        <>
+          <div className="form-grid">
+            <div className="form-row">
+              <label>Fecha prometida (de la oferta)</label>
+              <input className="input" type="date" value={fechaPrometida} onChange={(e) => setFechaPrometida(e.target.value)} />
+              <small className="muted">{fechaPrometida ? 'Tomada de la oferta del proveedor; podés ajustarla.' : 'La oferta no tiene fecha prometida: colocala acá.'}</small>
+            </div>
+            <div className="form-row">
+              <label>Fecha de recibido</label>
+              <input className="input" type="date" value={fechaRecibido} onChange={(e) => setFechaRecibido(e.target.value)} />
+              <small className="muted">Por defecto, hoy.</small>
+            </div>
+          </div>
+          {diasPorFecha != null && (
+            <div className="card" style={{ margin: '.1rem 0 .6rem' }}>
+              {diasPorFecha === 0
+                ? <>✓ Recibido <strong>en la fecha prometida</strong>.</>
+                : diasPorFecha > 0
+                  ? <>✓ Recibido <strong>{diasPorFecha} día(s) antes</strong> de lo prometido (adelantado).</>
+                  : <>⚠ Recibido <strong>{Math.abs(diasPorFecha)} día(s) después</strong> de lo prometido (atrasado).</>}
+            </div>
+          )}
+        </>
+      )}
 
       <div className="form-row">
         <label>Comentario adicional (opcional)</label>
@@ -934,7 +994,7 @@ function MetodoPagoModal({
 }: {
   orden: Orden;
   onClose: () => void;
-  onSent: (metodos: PagoMetodo[]) => Promise<void> | void;
+  onSent: (metodos: PagoMetodo[], soporte: { comprobanteTipo: 'nota_entrega' | 'factura'; retencionModo: 'se_paga_despues' | 'completo_reembolso' | null }) => Promise<void> | void;
 }) {
   const [monedas, setMonedas] = useState<string[]>(['Bs', 'USD', 'USDT', 'COP']);
   const [legs, setLegs] = useState<PagoMetodo[]>([{ metodo: 'divisas_efectivo', moneda: 'USD', monto: 0 }]);
@@ -945,6 +1005,9 @@ function MetodoPagoModal({
   // Contra entrega: ya se recibió y verificó; se confirma la Nota de entrega antes de pagar.
   const esContraEntrega = orden.condiciones_pago === 'contra_entrega';
   const [notaEntrega, setNotaEntrega] = useState(false);
+  // Soporte: Nota de entrega → directo a Tesorería. Factura → además pasa por Retenciones.
+  const [comprobanteTipo, setComprobanteTipo] = useState<'nota_entrega' | 'factura'>('nota_entrega');
+  const [retencionModo, setRetencionModo] = useState<'se_paga_despues' | 'completo_reembolso'>('se_paga_despues');
 
   useEffect(() => { listMonedas().then(setMonedas).catch(() => { /* base */ }); }, []);
   useEffect(() => {
@@ -977,7 +1040,7 @@ function MetodoPagoModal({
       }
     }
     setSaving(true);
-    try { await onSent(validos); }
+    try { await onSent(validos, { comprobanteTipo, retencionModo: comprobanteTipo === 'factura' ? retencionModo : null }); }
     catch (e) { setError(e instanceof Error ? e.message : 'No se pudo enviar'); setSaving(false); }
   }
 
@@ -1002,6 +1065,36 @@ function MetodoPagoModal({
         varios (<strong>multipago</strong>). El <strong>monto lo define Tesorería</strong> al pagar. Al enviar pasa a <strong>Confirmada pagar</strong> y aparece en Tesorería.
       </p>
       {error && <div className="card" style={{ borderColor: 'var(--danger)', marginBottom: '.75rem' }}><strong>Error:</strong> {error}</div>}
+
+      {/* Soporte: Nota de entrega (directo a Tesorería) vs Factura (pasa por Retenciones) */}
+      <div className="card" style={{ margin: '0 0 .75rem', padding: '.7rem .85rem' }}>
+        <div className="card-title" style={{ marginBottom: '.45rem' }}>Tipo de soporte</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '.5rem' }}>
+          <label className="card" style={{ display: 'flex', alignItems: 'flex-start', gap: '.5rem', margin: 0, padding: '.55rem .7rem', cursor: 'pointer', borderColor: comprobanteTipo === 'nota_entrega' ? 'var(--brand, #ff8a00)' : 'var(--border)' }}>
+            <input type="radio" name="comprobante" checked={comprobanteTipo === 'nota_entrega'} onChange={() => setComprobanteTipo('nota_entrega')} style={{ marginTop: '.2rem' }} />
+            <span style={{ fontSize: '.86rem' }}><strong>Nota de entrega</strong><br /><span className="muted">Va directo a Tesorería (como hasta ahora).</span></span>
+          </label>
+          <label className="card" style={{ display: 'flex', alignItems: 'flex-start', gap: '.5rem', margin: 0, padding: '.55rem .7rem', cursor: 'pointer', borderColor: comprobanteTipo === 'factura' ? 'var(--brand, #ff8a00)' : 'var(--border)' }}>
+            <input type="radio" name="comprobante" checked={comprobanteTipo === 'factura'} onChange={() => setComprobanteTipo('factura')} style={{ marginTop: '.2rem' }} />
+            <span style={{ fontSize: '.86rem' }}><strong>Factura</strong><br /><span className="muted">Pasa por Retenciones (y también a Tesorería para pagar).</span></span>
+          </label>
+        </div>
+        {comprobanteTipo === 'factura' && (
+          <div style={{ marginTop: '.6rem', borderTop: '1px dashed var(--border)', paddingTop: '.6rem' }}>
+            <div className="muted" style={{ fontSize: '.74rem', marginBottom: '.4rem' }}>Retención</div>
+            <div style={{ display: 'grid', gap: '.35rem' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '.5rem', cursor: 'pointer', fontSize: '.86rem' }}>
+                <input type="radio" name="ret-modo" checked={retencionModo === 'se_paga_despues'} onChange={() => setRetencionModo('se_paga_despues')} />
+                Se paga después
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '.5rem', cursor: 'pointer', fontSize: '.86rem' }}>
+                <input type="radio" name="ret-modo" checked={retencionModo === 'completo_reembolso'} onChange={() => setRetencionModo('completo_reembolso')} />
+                Se paga completo y luego se reembolsa
+              </label>
+            </div>
+          </div>
+        )}
+      </div>
 
       <div style={{ display: 'grid', gap: '.6rem' }}>
         {legs.map((l, i) => (

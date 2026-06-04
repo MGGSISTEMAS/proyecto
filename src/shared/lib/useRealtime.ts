@@ -27,15 +27,32 @@ export function useRealtime(tables: string[], onChange: () => void, opts?: { ena
     try { sb = getSupabase(); } catch { return; }
 
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const fire = () => { if (timer) clearTimeout(timer); timer = setTimeout(() => cb.current(), 300); };
+    let pendienteOculto = false;            // hubo cambios mientras la pestaña no estaba visible
+    const ocultaApi = typeof document !== 'undefined';
+
+    // Recarga con debounce (400 ms) para agrupar ráfagas de eventos relacionados.
+    const programar = () => { if (timer) clearTimeout(timer); timer = setTimeout(() => cb.current(), 400); };
+    const alEvento = () => {
+      // En segundo plano no recargamos (ahorra red/CPU); marcamos para ponernos al día al volver.
+      if (ocultaApi && document.hidden) { pendienteOculto = true; return; }
+      programar();
+    };
+    const alVolver = () => {
+      if (ocultaApi && !document.hidden && pendienteOculto) { pendienteOculto = false; programar(); }
+    };
+    if (ocultaApi) document.addEventListener('visibilitychange', alVolver);
 
     const channel = sb.channel(`rt-${key}-${Math.floor(Math.random() * 1e9)}`);
     tables.forEach((t) => {
-      channel.on('postgres_changes', { event: '*', schema: 'public', table: t }, fire);
+      channel.on('postgres_changes', { event: '*', schema: 'public', table: t }, alEvento);
     });
     channel.subscribe();
 
-    return () => { if (timer) clearTimeout(timer); sb.removeChannel(channel); };
+    return () => {
+      if (timer) clearTimeout(timer);
+      if (ocultaApi) document.removeEventListener('visibilitychange', alVolver);
+      sb.removeChannel(channel);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, enabled]);
 }
