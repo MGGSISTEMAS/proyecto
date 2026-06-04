@@ -1072,11 +1072,11 @@ function MetodoPagoModal({
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '.5rem' }}>
           <label className="card" style={{ display: 'flex', alignItems: 'flex-start', gap: '.5rem', margin: 0, padding: '.55rem .7rem', cursor: 'pointer', borderColor: comprobanteTipo === 'nota_entrega' ? 'var(--brand, #ff8a00)' : 'var(--border)' }}>
             <input type="radio" name="comprobante" checked={comprobanteTipo === 'nota_entrega'} onChange={() => setComprobanteTipo('nota_entrega')} style={{ marginTop: '.2rem' }} />
-            <span style={{ fontSize: '.86rem' }}><strong>Nota de entrega</strong><br /><span className="muted">Va directo a Tesorería (como hasta ahora).</span></span>
+            <span style={{ fontSize: '.86rem' }}><strong>Nota de entrega</strong></span>
           </label>
-          <label className="card" style={{ display: 'flex', alignItems: 'flex-start', gap: '.5rem', margin: 0, padding: '.55rem .7rem', cursor: 'pointer', borderColor: comprobanteTipo === 'factura' ? 'var(--brand, #ff8a00)' : 'var(--border)' }}>
+          <label className="card" style={{ display: 'flex', alignItems: 'center', gap: '.5rem', margin: 0, padding: '.55rem .7rem', cursor: 'pointer', borderColor: comprobanteTipo === 'factura' ? 'var(--brand, #ff8a00)' : 'var(--border)' }}>
             <input type="radio" name="comprobante" checked={comprobanteTipo === 'factura'} onChange={() => setComprobanteTipo('factura')} style={{ marginTop: '.2rem' }} />
-            <span style={{ fontSize: '.86rem' }}><strong>Factura</strong><br /><span className="muted">Pasa por Retenciones (y también a Tesorería para pagar).</span></span>
+            <span style={{ fontSize: '.86rem' }}><strong>Factura</strong></span>
           </label>
         </div>
         {comprobanteTipo === 'factura' && (

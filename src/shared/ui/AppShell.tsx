@@ -8,7 +8,8 @@ import { GlobalSearch } from '@/shared/ui/GlobalSearch';
 import { TasaChip } from '@/modules/tesoreria/TasaChip';
 import { toast } from '@/shared/ui/Toast';
 import { descargarManualUsuario, type CapturasManual } from '@/shared/lib/manualUsuarioPdf';
-import { descargarRespaldoSql, chequearRespaldoAutomatico, puedeRespaldar } from '@/shared/lib/backup';
+import { descargarRespaldoSql, enviarRespaldoPorCorreo, chequearRespaldoAutomatico, puedeRespaldar, BACKUP_EMAIL } from '@/shared/lib/backup';
+import { Modal } from '@/shared/ui/Modal';
 import { scanStockAndNotify, unreadCount } from '@/modules/notificaciones/notif.repository';
 import { initSound } from '@/shared/lib/sound';
 import { onNotifRefresh } from '@/shared/lib/notify';
@@ -146,15 +147,30 @@ export function AppShell() {
     }
   }
 
-  // Descarga manual del respaldo .sql de la base de datos.
-  async function handleRespaldo() {
+  // Respaldo manual: al hacer clic se elige Descargar o Enviar por correo.
+  const [respaldoOpen, setRespaldoOpen] = useState(false);
+  async function handleRespaldoDescargar() {
     if (descargandoBackup) return;
     setDescargandoBackup(true);
     try {
       await descargarRespaldoSql(user?.email ?? 'sistema', false);
       toast('Respaldo de datos descargado (.sql)', 'success');
+      setRespaldoOpen(false);
     } catch (e) {
       toast(e instanceof Error ? e.message : 'No se pudo generar el respaldo', 'error');
+    } finally {
+      setDescargandoBackup(false);
+    }
+  }
+  async function handleRespaldoCorreo() {
+    if (descargandoBackup) return;
+    setDescargandoBackup(true);
+    try {
+      const { destinatarios } = await enviarRespaldoPorCorreo(user?.email ?? 'sistema', false);
+      toast(`Respaldo enviado por correo a ${destinatarios.join(', ')}`, 'success');
+      setRespaldoOpen(false);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'No se pudo enviar el respaldo', 'error');
     } finally {
       setDescargandoBackup(false);
     }
@@ -168,7 +184,7 @@ export function AppShell() {
     if (!puedeRespaldar(role)) return;
     backupAutoCorrido.current = true;
     chequearRespaldoAutomatico(role, user?.email ?? 'sistema')
-      .then((corrio) => { if (corrio) toast('Respaldo automático (cada 30 días) descargado', 'info'); })
+      .then((corrio) => { if (corrio) toast(`Respaldo automático (cada 30 días) enviado por correo a ${BACKUP_EMAIL}`, 'info'); })
       .catch(() => { /* silencioso: el respaldo manual sigue disponible */ });
   }, [role, user?.email]);
 
@@ -224,12 +240,11 @@ export function AppShell() {
           {mostrarRespaldo && (
             <a
               href="#"
-              onClick={(e) => { e.preventDefault(); void handleRespaldo(); }}
-              title="Descargar el respaldo de la base de datos (.sql)"
-              style={descargandoBackup ? { opacity: 0.6, pointerEvents: 'none' } : undefined}
+              onClick={(e) => { e.preventDefault(); setRespaldoOpen(true); }}
+              title="Respaldo de la base de datos (.sql): descargar o enviar por correo"
             >
               <span className="icn">💾</span>{' '}
-              <span>{descargandoBackup ? 'Generando…' : 'Respaldo de Data'}</span>
+              <span>Respaldo de Data</span>
             </a>
           )}
           {MOSTRAR_MANUAL && (
@@ -345,6 +360,25 @@ export function AppShell() {
         onClose={() => { setNotifOpen(false); void refreshUnread(); }}
         onAllRead={handleAllRead}
       />
+
+      {respaldoOpen && (
+        <Modal
+          title="Respaldo de la base de datos"
+          size="md"
+          onClose={() => { if (!descargandoBackup) setRespaldoOpen(false); }}
+          footer={
+            <>
+              <button className="btn btn-ghost" onClick={() => setRespaldoOpen(false)} disabled={descargandoBackup}>Cancelar</button>
+              <button className="btn btn-ghost" onClick={() => void handleRespaldoDescargar()} disabled={descargandoBackup}>↓ Descargar</button>
+              <button className="btn btn-primary" onClick={() => void handleRespaldoCorreo()} disabled={descargandoBackup}>✉ Enviar por correo</button>
+            </>
+          }
+        >
+          <p className="muted" style={{ margin: 0, fontSize: '.9rem' }}>
+            {descargandoBackup ? 'Generando el respaldo…' : <>¿Cómo querés el respaldo de la base de datos (.sql)? El envío por correo va a <strong>{BACKUP_EMAIL}</strong>.</>}
+          </p>
+        </Modal>
+      )}
     </div>
   );
 }
