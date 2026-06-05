@@ -751,7 +751,12 @@ function TransferenciasInterPanel({ transfers, cajas, canWrite, actor, actorName
   const entrantes = transfers.filter((t) => t.direccion === 'entrante' && t.estado === 'por_confirmar');
   const salientes = transfers.filter((t) => t.direccion === 'saliente');
   const salientesVivas = salientes.filter((t) => t.estado !== 'recibida');
-  const recibidas = salientes.length - salientesVivas.length;
+  const salientesRecibidas = salientes.filter((t) => t.estado === 'recibida');
+  const recibidas = salientesRecibidas.length;
+  // Nombre real del destino (caja externa) en vez de "el otro sistema".
+  const destinosRecibidos = Array.from(
+    new Set(salientesRecibidas.map((t) => t.caja_nombre || t.empresa_destino)),
+  ).join(' · ');
   if (!entrantes.length && !salientes.length) return null;
 
   async function confirmar(t: TransferenciaInter) {
@@ -838,7 +843,7 @@ function TransferenciasInterPanel({ transfers, cajas, canWrite, actor, actorName
 
       {recibidas > 0 && (
         <div className="muted" style={{ fontSize: '.72rem', marginTop: '.5rem' }}>
-          {recibidas} saliente(s) ya confirmada(s) por el otro sistema.
+          {recibidas === 1 ? 'Confirmado' : `${recibidas} confirmadas`} por {destinosRecibidos}.
         </div>
       )}
     </div>
