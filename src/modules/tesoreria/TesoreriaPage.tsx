@@ -8,8 +8,9 @@ import { useRealtime } from '@/shared/lib/useRealtime';
 import { useSession } from '@/modules/auth/authStore';
 import { usePermissions } from '@/modules/auth/PermissionsContext';
 import { GestionarCajasModal } from '@/modules/salidas/GestionarCajasModal';
-import { listDirectorioUsuarios, type PersonaDirectorio } from '@/modules/salidas/salidas.repository';
-import type { Caja, MovimientoCaja } from '@/shared/lib/types';
+import { listPersonal, crearPersonal, actualizarPersonal, setPersonalActivo, eliminarPersonal, type PersonalInput } from './personal.repository';
+import type { Personal } from '@/shared/lib/types';
+import type { Caja, MovimientoCaja, Orden } from '@/shared/lib/types';
 import { HistorialTasasModal } from './HistorialTasasModal';
 import { TasasView } from './TasasView';
 import { getTasaHoy, aBs, aExtranjero, round2, getTasasMercado, refrescarBinanceP2P, getBinance3, refrescarTasasSiVencido, type TasasMercado, type Binance3 } from './tasas.repository';
@@ -30,12 +31,14 @@ import {
 import {
   listOrdenesPorPagar, pagarOrdenCompra, pagarOrdenCompraMulti, labelMetodoPago, pagoSinComprobante, type OrdenPorPagar,
   listOrdenesEnCredito, registrarAbonoMulti, listAbonos, type AbonoLeg,
+  getOrdenById, urlAdjuntoOc,
 } from '@/modules/pedidos/pedidos.repository';
 import { labelCondicionPago } from '@/modules/pedidos/ofertas.repository';
 import { resumenDatosPago } from '@/shared/ui/DatosPagoFields';
 import { comprobantesDeOrden, urlRetencion, labelRetencionModo } from '@/modules/retenciones/retenciones.repository';
 import { descargarReportePdf, type ReporteMeta } from './reportePdf';
-import { enviarReportePorCorreo } from './enviarReporte';
+import { descargarMovimientoDetallePdf } from './movimientoDetallePdf';
+import { enviarReportePorCorreo, enviarMovimientoDetallePorCorreo } from './enviarReporte';
 import type { AbonoCredito } from '@/shared/lib/types';
 import { descargarOrdenCompraPdf } from '@/modules/pedidos/ordenCompraPdf';
 import { listOfertasByOrden, getPdfOfertaSignedUrl } from '@/modules/pedidos/ofertas.repository';
@@ -73,6 +76,7 @@ export function TesoreriaPage() {
   const [creditosCount, setCreditosCount] = useState(0);
   const [vista, setVista] = useState<'tesoreria' | 'tasas' | 'movimientos'>('tesoreria');
   const [correoMovOpen, setCorreoMovOpen] = useState(false);
+  const [movSel, setMovSel] = useState<MovimientoCaja | null>(null);
 
   // Filtros del registro de movimientos
   const [fMoneda, setFMoneda] = useState<string>('');
@@ -236,10 +240,10 @@ export function TesoreriaPage() {
             </div>
             <div className="table-wrap">
               <table className="table" style={{ fontSize: '.85rem' }}>
-                <thead><tr><th>Fecha</th><th>Caja</th><th>Movimiento</th><th>Concepto</th><th style={{ textAlign: 'right' }}>Monto</th><th style={{ textAlign: 'right' }}>Saldo</th></tr></thead>
+                <thead><tr><th>Fecha</th><th>Caja</th><th>Movimiento</th><th>Concepto</th><th style={{ textAlign: 'right' }}>Monto</th><th style={{ textAlign: 'right' }}>Saldo</th><th style={{ textAlign: 'center' }}>Detalle</th></tr></thead>
                 <tbody>
-                  {loading && <tr><td colSpan={6} className="muted" style={{ textAlign: 'center' }}>Cargando…</td></tr>}
-                  {!loading && !libro.length && <tr><td colSpan={6}><EmptyState message="Sin movimientos" /></td></tr>}
+                  {loading && <tr><td colSpan={7} className="muted" style={{ textAlign: 'center' }}>Cargando…</td></tr>}
+                  {!loading && !libro.length && <tr><td colSpan={7}><EmptyState message="Sin movimientos" /></td></tr>}
                   {!loading && libro.map((m) => {
                     const egreso = m.tipo === 'salida' || m.tipo === 'traslado_salida'
                   || (m.tipo === 'ajuste' && Number(m.saldo_despues) < Number(m.saldo_antes));
@@ -252,6 +256,9 @@ export function TesoreriaPage() {
                         <td>{concepto}</td>
                         <td className="mono" style={{ textAlign: 'right', color: egreso ? 'var(--danger)' : 'var(--success)' }}>{egreso ? '−' : '+'}{monto(m.monto, m.moneda)}</td>
                         <td className="mono" style={{ textAlign: 'right' }}>{monto(m.saldo_despues, m.moneda)}</td>
+                        <td style={{ textAlign: 'center' }}>
+                          <button className="btn btn-sm btn-ghost" onClick={() => setMovSel(m)}>🔍 Detalles</button>
+                        </td>
                       </tr>
                     );
                   })}
@@ -262,6 +269,7 @@ export function TesoreriaPage() {
       </>
       )}
 
+      {movSel && <MovimientoDetalleModal mov={movSel} defaultEmail={actor} onClose={() => setMovSel(null)} />}
       {correoMovOpen && <EnviarReporteModal movs={libro} meta={reporteMeta()} defaultEmail={actor} onClose={() => setCorreoMovOpen(false)} />}
       {modal === 'gasto' && <GastoModal cajas={cajas} actor={actor} actorName={actorName} onClose={() => setModal('none')} onSaved={cerrarYRecargar} />}
       {modal === 'traslado' && <TrasladoModal cajas={cajas} actor={actor} actorName={actorName} onClose={() => setModal('none')} onSaved={cerrarYRecargar} />}
@@ -274,6 +282,187 @@ export function TesoreriaPage() {
       {modal === 'creditos' && <CuentasCreditoModal cajas={cajas} actor={actor} actorName={actorName} onClose={() => setModal('none')} onChanged={reload} />}
       {cajaSel && <CajaDetalleModal caja={cajaSel} canWrite={canWrite} actor={actor} actorName={actorName} onClose={() => setCajaSel(null)} onChanged={async () => { await reload(); }} />}
     </div>
+  );
+}
+
+/* ───────────── Detalle de un movimiento del registro ───────────── */
+
+function MovimientoDetalleModal({ mov, defaultEmail, onClose }: { mov: MovimientoCaja; defaultEmail: string; onClose: () => void }) {
+  const egreso = mov.tipo === 'salida' || mov.tipo === 'traslado_salida'
+    || (mov.tipo === 'ajuste' && Number(mov.saldo_despues) < Number(mov.saldo_antes));
+  const [orden, setOrden] = useState<Orden | null>(null);
+  const [cargandoOrden, setCargandoOrden] = useState(false);
+  const [abriendo, setAbriendo] = useState(false);
+  const [generandoPdf, setGenerandoPdf] = useState(false);
+  const [correoOpen, setCorreoOpen] = useState(false);
+
+  // Si el movimiento es un pago de compra (pago_oc), traemos la OC para mostrar
+  // seriales de billetes, comprobante y datos de la orden pagada.
+  useEffect(() => {
+    if (!mov.ref_orden_id) { setOrden(null); return; }
+    setCargandoOrden(true);
+    getOrdenById(mov.ref_orden_id)
+      .then((o) => setOrden(o))
+      .catch(() => setOrden(null))
+      .finally(() => setCargandoOrden(false));
+  }, [mov.ref_orden_id]);
+
+  async function verComprobante(path: string) {
+    setAbriendo(true);
+    try {
+      const url = await urlAdjuntoOc(path);
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch { toast('No se pudo abrir el comprobante', 'error'); }
+    finally { setAbriendo(false); }
+  }
+
+  const seriales = orden?.seriales_billetes ?? [];
+
+  async function descargarPdf() {
+    setGenerandoPdf(true);
+    try { await descargarMovimientoDetallePdf(mov, orden); }
+    catch (e) { toast(e instanceof Error ? e.message : 'No se pudo generar el PDF', 'error'); }
+    finally { setGenerandoPdf(false); }
+  }
+
+  return (
+    <Modal title="Detalle del movimiento" size="lg" onClose={onClose} footer={
+      <>
+        <button className="btn btn-ghost" onClick={descargarPdf} disabled={generandoPdf || cargandoOrden}>
+          {generandoPdf ? 'Generando…' : '↓ PDF'}
+        </button>
+        <button className="btn btn-ghost" onClick={() => setCorreoOpen(true)} disabled={cargandoOrden}>✉ Enviar por correo</button>
+        <button className="btn btn-primary" onClick={onClose}>Cerrar</button>
+      </>
+    }>
+      {/* Datos generales del movimiento */}
+      <div className="card" style={{ marginBottom: '.75rem' }}>
+        <div className="card-title" style={{ marginBottom: '.4rem' }}>Movimiento</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '.35rem .9rem', fontSize: '.84rem' }}>
+          <div><span className="muted">Fecha:</span> <strong>{dateTime(mov.at)}</strong></div>
+          <div><span className="muted">Caja:</span> <strong>{mov.caja?.nombre ?? '—'}</strong></div>
+          <div><span className="muted">Tipo:</span> <strong>{TIPO_MOV_LABEL[mov.tipo] ?? mov.tipo}</strong></div>
+          <div><span className="muted">Categoría:</span> <strong>{CAT_LABEL[mov.categoria ?? ''] ?? (mov.categoria || '—')}</strong></div>
+          <div><span className="muted">Monto:</span> <strong className="mono" style={{ color: egreso ? 'var(--danger)' : 'var(--success)' }}>{egreso ? '−' : '+'}{monto(mov.monto, mov.moneda)}</strong></div>
+          {mov.cuenta && <div><span className="muted">Cuenta:</span> <strong>{mov.cuenta}</strong></div>}
+          {mov.tasa_bs != null && mov.tasa_bs > 0 && <div><span className="muted">Tasa aplicada:</span> <strong className="mono">{monto(mov.tasa_bs, 'Bs')} / $</strong></div>}
+          <div><span className="muted">Saldo antes:</span> <strong className="mono">{monto(mov.saldo_antes, mov.moneda)}</strong></div>
+          <div><span className="muted">Saldo después:</span> <strong className="mono">{monto(mov.saldo_despues, mov.moneda)}</strong></div>
+          {mov.beneficiario && <div><span className="muted">Beneficiario:</span> <strong>{mov.beneficiario}</strong></div>}
+          {mov.destino && <div><span className="muted">Destino:</span> <strong>{mov.destino}</strong></div>}
+          <div><span className="muted">Registrado por:</span> <strong>{mov.actor_name || mov.actor}</strong></div>
+        </div>
+        {mov.motivo && (
+          <div style={{ marginTop: '.5rem', fontSize: '.84rem' }}>
+            <span className="muted">Concepto / motivo:</span> {mov.motivo}
+          </div>
+        )}
+      </div>
+
+      {/* Orden pagada (si el movimiento es un pago de compra) */}
+      {mov.ref_orden_id && (
+        <div className="card" style={{ marginBottom: '.75rem' }}>
+          <div className="card-title" style={{ marginBottom: '.4rem' }}>Orden pagada</div>
+          {cargandoOrden && <div className="muted" style={{ fontSize: '.84rem' }}>Cargando la orden…</div>}
+          {!cargandoOrden && !orden && <div className="muted" style={{ fontSize: '.84rem' }}>No se pudo cargar la orden vinculada.</div>}
+          {!cargandoOrden && orden && (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '.35rem .9rem', fontSize: '.84rem' }}>
+                <div><span className="muted">OP:</span> <strong className="mono">{orden.codigo}</strong></div>
+                <div><span className="muted">N°ODC:</span> <strong className="mono">{orden.oc_codigo ?? '—'}</strong></div>
+                <div><span className="muted">Total OC:</span> <strong className="mono">{monto(orden.total, 'USD')}</strong></div>
+                {orden.recibido_total != null && <div><span className="muted">Recibido:</span> <strong className="mono">{monto(Number(orden.recibido_total), 'USD')}</strong></div>}
+                <div><span className="muted">Solicitante:</span> <strong>{orden.solicitante || orden.solicitante_email}</strong></div>
+                {orden.condiciones_pago && <div><span className="muted">Condición:</span> <strong>{labelCondicionPago(orden.condiciones_pago)}</strong></div>}
+                {orden.pagada_en && <div><span className="muted">Pagada:</span> <strong>{dateTime(orden.pagada_en)}</strong></div>}
+              </div>
+
+              {/* Seriales de billetes entregados */}
+              <div style={{ marginTop: '.6rem' }}>
+                <div className="muted" style={{ fontSize: '.78rem', marginBottom: '.25rem' }}>Seriales de los billetes entregados</div>
+                {seriales.length ? (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '.4rem' }}>
+                    {seriales.map((s, i) => (
+                      <span key={s} className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '.35rem', background: 'var(--bg-1)' }}>
+                        <span className="muted">{i + 1}.</span><span className="mono">{s}</span>
+                      </span>
+                    ))}
+                    <span className="muted" style={{ alignSelf: 'center', fontSize: '.8rem' }}>{seriales.length} billete(s)</span>
+                  </div>
+                ) : <span className="muted" style={{ fontSize: '.84rem' }}>No se registraron seriales en este pago.</span>}
+              </div>
+
+              {/* Comprobante de pago (si se subió) */}
+              <div style={{ marginTop: '.6rem' }}>
+                <div className="muted" style={{ fontSize: '.78rem', marginBottom: '.25rem' }}>Comprobante de pago</div>
+                {orden.factura_path ? (
+                  <button className="btn btn-sm btn-ghost" disabled={abriendo} onClick={() => verComprobante(orden.factura_path!)}>
+                    {abriendo ? 'Abriendo…' : `📎 Ver comprobante${orden.factura_nombre ? ` · ${orden.factura_nombre}` : ''}`}
+                  </button>
+                ) : <span className="muted" style={{ fontSize: '.84rem' }}>No se subió comprobante (pago en efectivo, opcional).</span>}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {correoOpen && (
+        <DetalleCorreoModal mov={mov} orden={orden} defaultEmail={defaultEmail} onClose={() => setCorreoOpen(false)} />
+      )}
+    </Modal>
+  );
+}
+
+/** Envío por correo del detalle de un movimiento (mismo patrón que el reporte). */
+function DetalleCorreoModal({ mov, orden, defaultEmail, onClose }: {
+  mov: MovimientoCaja; orden: Orden | null; defaultEmail: string; onClose: () => void;
+}) {
+  const [incluirPropio, setIncluirPropio] = useState(true);
+  const [extra, setExtra] = useState('');
+  const [enviando, setEnviando] = useState(false);
+  const propio = defaultEmail.trim().toLowerCase();
+  const emailRx = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  async function handleEnviar() {
+    const lista: string[] = [];
+    if (incluirPropio && propio) lista.push(propio);
+    const extraClean = extra.trim().toLowerCase();
+    if (extraClean) {
+      if (!emailRx.test(extraClean)) { toast('El correo adicional no es válido', 'error'); return; }
+      lista.push(extraClean);
+    }
+    setEnviando(true);
+    try {
+      const r = await enviarMovimientoDetallePorCorreo(mov, orden, lista);
+      notify(`Detalle enviado a ${r.destinatarios.join(', ')}`, 'success', { link: '#/app/tesoreria' });
+      onClose();
+    } catch (e) { toast(e instanceof Error ? e.message : 'No se pudo enviar', 'error'); }
+    finally { setEnviando(false); }
+  }
+
+  return (
+    <Modal title="Enviar detalle por correo" size="md" onClose={() => !enviando && onClose()} footer={
+      <>
+        <button className="btn btn-ghost" onClick={onClose} disabled={enviando}>Cancelar</button>
+        <button className="btn btn-primary" onClick={handleEnviar} disabled={enviando}>{enviando ? 'Enviando…' : '📧 Enviar'}</button>
+      </>
+    }>
+      <p className="muted" style={{ marginTop: 0, fontSize: '.88rem' }}>
+        Se enviará el <strong>PDF del detalle</strong>{orden ? ' (con la orden pagada, seriales y comprobante)' : ''} a los destinatarios seleccionados.
+      </p>
+      <label style={{ display: 'flex', alignItems: 'center', gap: '.6rem', padding: '.7rem .85rem', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', background: incluirPropio ? 'rgba(255,138,0,0.06)' : 'transparent', cursor: propio ? 'pointer' : 'not-allowed', marginBottom: '.6rem' }}>
+        <input type="checkbox" checked={incluirPropio} disabled={!propio} onChange={(e) => setIncluirPropio(e.target.checked)} />
+        <div>
+          <div style={{ fontWeight: 600 }}>Tu correo</div>
+          <div className="mono" style={{ fontSize: '.82rem' }}>{propio || '—'}</div>
+        </div>
+      </label>
+      <div className="form-row" style={{ marginTop: '.4rem' }}>
+        <label>Correo adicional (opcional)</label>
+        <input className="input" type="email" value={extra} onChange={(e) => setExtra(e.target.value)} placeholder="otro@correo.com" maxLength={120} />
+        <small className="muted">Si no marcás ninguno, se envía a los admin/jefe.</small>
+      </div>
+    </Modal>
   );
 }
 
@@ -908,13 +1097,31 @@ function PagoPersonalModal({ cajas, actor, actorName, onClose, onSaved }: {
 }) {
   const [cajaId, setCajaId] = useState(cajas[0]?.id ?? '');
   const [concepto, setConcepto] = useState('');
-  const [personas, setPersonas] = useState<PersonaDirectorio[]>([]);
+  const [personas, setPersonas] = useState<Personal[]>([]);
   const [montos, setMontos] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [gestionOpen, setGestionOpen] = useState(false);
   const caja = cajas.find((c) => c.id === cajaId) ?? null;
 
-  useEffect(() => { listDirectorioUsuarios().then(setPersonas).catch(() => setPersonas([])); }, []);
+  const cargarPersonal = useCallback(() => {
+    listPersonal(true).then(setPersonas).catch(() => setPersonas([]));
+  }, []);
+  useEffect(() => { cargarPersonal(); }, [cargarPersonal]);
+  useRealtime(['personal'], cargarPersonal);
+
+  // Precarga el sueldo base como monto sugerido (editable) de cada persona.
+  function precargarSueldos() {
+    setMontos((m) => {
+      const next = { ...m };
+      for (const p of personas) {
+        if ((next[p.id] === undefined || next[p.id] === '') && Number(p.sueldo_base) > 0) {
+          next[p.id] = String(p.sueldo_base);
+        }
+      }
+      return next;
+    });
+  }
 
   const seleccion = personas
     .map((p) => ({ p, monto: Number(montos[p.id]) || 0 }))
@@ -938,7 +1145,7 @@ function PagoPersonalModal({ cajas, actor, actorName, onClose, onSaved }: {
   }
 
   return (
-    <Modal title="Pago a personal (multipagos)" size="lg" onClose={onClose} footer={
+    <Modal title="Pago a personal (nómina)" size="lg" onClose={onClose} footer={
       <><button className="btn btn-ghost" onClick={onClose} disabled={saving}>Cancelar</button>
       <button type="submit" form="teso-pago" className="btn btn-primary" disabled={saving}>{saving ? 'Pagando…' : `Pagar ${monto(total, caja?.moneda ?? 'Bs')}`}</button></>
     }>
@@ -953,15 +1160,24 @@ function PagoPersonalModal({ cajas, actor, actorName, onClose, onSaved }: {
           </div>
           <div className="form-row"><label>Concepto</label><input className="input" value={concepto} onChange={(e) => setConcepto(e.target.value)} placeholder="Quincena, bono, etc." /></div>
         </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap', margin: '.4rem 0 .5rem' }}>
+          <div className="muted" style={{ fontSize: '.82rem' }}>{personas.length} persona(s) en nómina</div>
+          <div style={{ display: 'flex', gap: '.4rem', flexWrap: 'wrap' }}>
+            <button type="button" className="btn btn-sm btn-ghost" onClick={precargarSueldos} disabled={!personas.length}>↺ Cargar sueldos base</button>
+            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setGestionOpen(true)}>👥 Personal</button>
+          </div>
+        </div>
         <div className="table-wrap" style={{ maxHeight: 320, overflowY: 'auto' }}>
           <table className="table" style={{ fontSize: '.85rem' }}>
-            <thead><tr><th>Persona</th><th>Cargo</th><th style={{ width: 160 }}>Monto a pagar</th></tr></thead>
+            <thead><tr><th>Persona</th><th>Departamento</th><th>Cargo</th><th style={{ textAlign: 'right', width: 110 }}>Sueldo base</th><th style={{ width: 160 }}>Monto a pagar</th></tr></thead>
             <tbody>
-              {!personas.length && <tr><td colSpan={3} className="muted" style={{ textAlign: 'center' }}>Sin personal registrado.</td></tr>}
+              {!personas.length && <tr><td colSpan={5} className="muted" style={{ textAlign: 'center' }}>Sin personal registrado. Usá <strong>👥 Personal</strong> para agregar.</td></tr>}
               {personas.map((p) => (
                 <tr key={p.id}>
                   <td>{p.nombre} {p.apellido}</td>
-                  <td className="muted">{p.cargo}</td>
+                  <td className="muted">{p.departamento || '—'}</td>
+                  <td className="muted">{p.cargo || '—'}</td>
+                  <td className="mono" style={{ textAlign: 'right' }}>{Number(p.sueldo_base) > 0 ? monto(p.sueldo_base, caja?.moneda ?? 'Bs') : '—'}</td>
                   <td><input className="input mono" type="number" min={0} step="any" value={montos[p.id] ?? ''} onChange={(e) => setMontos((m) => ({ ...m, [p.id]: dosDecimales(e.target.value) }))} placeholder="0,00" /></td>
                 </tr>
               ))}
@@ -969,6 +1185,115 @@ function PagoPersonalModal({ cajas, actor, actorName, onClose, onSaved }: {
           </table>
         </div>
       </form>
+
+      {gestionOpen && (
+        <GestionarPersonalModal actor={actor} onClose={() => setGestionOpen(false)} onChanged={cargarPersonal} />
+      )}
+    </Modal>
+  );
+}
+
+/* ───────── Gestión del Personal (nómina): alta/edición/activar ───────── */
+function GestionarPersonalModal({ actor, onClose, onChanged }: {
+  actor: string; onClose: () => void; onChanged: () => void;
+}) {
+  const VACIO: PersonalInput = { nombre: '', apellido: '', cedula: '', cargo: '', departamento: '', sueldo_base: 0 };
+  const [lista, setLista] = useState<Personal[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [form, setForm] = useState<PersonalInput>(VACIO);
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const recargar = useCallback(async () => {
+    setLoading(true);
+    try { setLista(await listPersonal(false)); }
+    catch (e) { toast(e instanceof Error ? e.message : 'No se pudo cargar el personal', 'error'); }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => { void recargar(); }, [recargar]);
+  useRealtime(['personal'], () => { void recargar(); });
+
+  function editar(p: Personal) {
+    setEditId(p.id);
+    setForm({ nombre: p.nombre, apellido: p.apellido, cedula: p.cedula ?? '', cargo: p.cargo ?? '', departamento: p.departamento ?? '', sueldo_base: Number(p.sueldo_base) || 0 });
+    setError(null);
+  }
+  function limpiar() { setEditId(null); setForm(VACIO); setError(null); }
+
+  async function guardar(e: FormEvent) {
+    e.preventDefault(); setError(null);
+    if (!form.nombre.trim()) { setError('Indicá el nombre.'); return; }
+    setGuardando(true);
+    try {
+      if (editId) await actualizarPersonal(editId, form);
+      else await crearPersonal(form, actor);
+      toast(editId ? 'Personal actualizado' : 'Personal agregado', 'success');
+      limpiar();
+      await recargar();
+      onChanged();
+    } catch (err) { setError(err instanceof Error ? err.message : 'No se pudo guardar'); }
+    finally { setGuardando(false); }
+  }
+
+  async function toggleActivo(p: Personal) {
+    try { await setPersonalActivo(p.id, !p.activo); await recargar(); onChanged(); }
+    catch (e) { toast(e instanceof Error ? e.message : 'No se pudo cambiar', 'error'); }
+  }
+  async function borrar(p: Personal) {
+    if (!window.confirm(`¿Eliminar a ${p.nombre} ${p.apellido} de la nómina? (no afecta los pagos ya hechos)`)) return;
+    try { await eliminarPersonal(p.id); await recargar(); onChanged(); toast('Eliminado', 'success'); }
+    catch (e) { toast(e instanceof Error ? e.message : 'No se pudo eliminar', 'error'); }
+  }
+
+  return (
+    <Modal title="Personal (nómina)" size="lg" onClose={onClose} footer={
+      <button className="btn btn-ghost" onClick={onClose}>Cerrar</button>
+    }>
+      <form onSubmit={guardar} style={{ marginBottom: '.85rem' }}>
+        {error && <div className="card" style={{ borderColor: 'var(--danger)', marginBottom: '.6rem' }}><strong>Error:</strong> {error}</div>}
+        <div className="card" style={{ padding: '.75rem' }}>
+          <div className="card-title" style={{ marginBottom: '.5rem' }}>{editId ? 'Editar persona' : 'Agregar persona'}</div>
+          <div className="form-grid">
+            <div className="form-row"><label>Nombre *</label><input className="input" value={form.nombre} onChange={(e) => setForm((f) => ({ ...f, nombre: e.target.value }))} required autoFocus /></div>
+            <div className="form-row"><label>Apellido</label><input className="input" value={form.apellido ?? ''} onChange={(e) => setForm((f) => ({ ...f, apellido: e.target.value }))} /></div>
+            <div className="form-row"><label>Cédula</label><input className="input" value={form.cedula ?? ''} onChange={(e) => setForm((f) => ({ ...f, cedula: e.target.value }))} placeholder="V-12345678" /></div>
+            <div className="form-row"><label>Cargo</label><input className="input" value={form.cargo ?? ''} onChange={(e) => setForm((f) => ({ ...f, cargo: e.target.value }))} placeholder="Operador, supervisor…" /></div>
+            <div className="form-row"><label>Departamento</label><input className="input" value={form.departamento ?? ''} onChange={(e) => setForm((f) => ({ ...f, departamento: e.target.value }))} placeholder="Mina, Administración…" /></div>
+            <div className="form-row"><label>Sueldo base</label><input className="input mono" type="number" min={0} step="any" value={form.sueldo_base ?? 0} onChange={(e) => setForm((f) => ({ ...f, sueldo_base: Number(e.target.value) || 0 }))} placeholder="0,00" /></div>
+          </div>
+          <div style={{ display: 'flex', gap: '.5rem', marginTop: '.5rem' }}>
+            <button type="submit" className="btn btn-primary" disabled={guardando}>{guardando ? 'Guardando…' : editId ? 'Guardar cambios' : '+ Agregar'}</button>
+            {editId && <button type="button" className="btn btn-ghost" onClick={limpiar} disabled={guardando}>Cancelar edición</button>}
+          </div>
+        </div>
+      </form>
+
+      <div className="table-wrap" style={{ maxHeight: 300, overflowY: 'auto' }}>
+        <table className="table" style={{ fontSize: '.84rem' }}>
+          <thead><tr><th>Persona</th><th>Departamento</th><th>Cargo</th><th style={{ textAlign: 'right' }}>Sueldo base</th><th style={{ textAlign: 'center' }}>Estado</th><th style={{ textAlign: 'center', width: 150 }}>Acciones</th></tr></thead>
+          <tbody>
+            {loading && <tr><td colSpan={6} className="muted" style={{ textAlign: 'center' }}>Cargando…</td></tr>}
+            {!loading && !lista.length && <tr><td colSpan={6} className="muted" style={{ textAlign: 'center' }}>Sin personal. Agregá la primera persona arriba.</td></tr>}
+            {!loading && lista.map((p) => (
+              <tr key={p.id} style={{ opacity: p.activo ? 1 : 0.55 }}>
+                <td>{p.nombre} {p.apellido}{p.cedula ? <span className="muted"> · {p.cedula}</span> : null}</td>
+                <td className="muted">{p.departamento || '—'}</td>
+                <td className="muted">{p.cargo || '—'}</td>
+                <td className="mono" style={{ textAlign: 'right' }}>{Number(p.sueldo_base) > 0 ? Number(p.sueldo_base).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}</td>
+                <td style={{ textAlign: 'center' }}>
+                  <span className="badge" style={{ color: p.activo ? 'var(--success)' : 'var(--muted)' }}>{p.activo ? 'Activo' : 'Inactivo'}</span>
+                </td>
+                <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                  <button className="btn btn-sm btn-ghost" onClick={() => editar(p)} title="Editar">✎</button>
+                  <button className="btn btn-sm btn-ghost" onClick={() => toggleActivo(p)} title={p.activo ? 'Desactivar' : 'Activar'}>{p.activo ? '⏸' : '▶'}</button>
+                  <button className="btn btn-sm btn-ghost" onClick={() => borrar(p)} title="Eliminar" style={{ color: 'var(--danger)' }}>🗑</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </Modal>
   );
 }
@@ -1454,6 +1779,9 @@ function PagarOrdenModal({ row, cajas, actor, actorName, onClose, onPaid }: {
   const [montoStr, setMontoStr] = useState(String(baseUsd));
   const [factura, setFactura] = useState<File | null>(null);
   const [motivoPago, setMotivoPago] = useState('');
+  // Seriales de billetes entregados (solo cuando se paga con USD físico).
+  const [seriales, setSeriales] = useState<string[]>([]);
+  const [serialInput, setSerialInput] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const caja = cajas.find((c) => c.id === cajaId) ?? null;
@@ -1516,6 +1844,23 @@ function PagarOrdenModal({ row, cajas, actor, actorName, onClose, onPaid }: {
   const excedeTotalSimple = !esMultimoneda && montoUsdSimple > totalUsd + 0.01;
   const excedeTotal = esMultimoneda ? excedeTotalMulti : excedeTotalSimple;
 
+  // ¿El pago entrega USD físico (efectivo)? Solo entonces se piden los seriales de
+  // los billetes. Simple: caja en USD. Multimoneda: pata USD con monto cargado.
+  const pagaUsdEfectivo = esMultimoneda
+    ? saldosCaja.some((s) => s.moneda === 'USD' && (Number(legMontos[s.id]) || 0) > 0)
+    : moneda === 'USD' && montoNum > 0;
+
+  function agregarSerial() {
+    const v = serialInput.trim();
+    if (!v) return;
+    if (seriales.includes(v)) { setSerialInput(''); return; }
+    setSeriales((xs) => [...xs, v]);
+    setSerialInput('');
+  }
+  function quitarSerial(s: string) {
+    setSeriales((xs) => xs.filter((x) => x !== s));
+  }
+
   // Archivos cargados durante la OC: cotizaciones (PDF) de las ofertas.
   const [adjuntos, setAdjuntos] = useState<OfertaProveedor[]>([]);
   const [descargando, setDescargando] = useState<string | null>(null);
@@ -1550,7 +1895,7 @@ function PagarOrdenModal({ row, cajas, actor, actorName, onClose, onPaid }: {
         if (!legs.length) { setError('Indicá cuánto pagar en al menos una moneda.'); setSaving(false); return; }
         if (excedeTotalMulti) { setError(`No podés pagar más que el total de la OC. Cargado ${monto(sumUsdMulti, 'USD')}, total ${monto(totalUsd, 'USD')} (te pasaste por ${monto(round2(sumUsdMulti - totalUsd), 'USD')}).`); setSaving(false); return; }
         if (!cubreTotalMulti) { setError(`Lo cargado (${monto(sumUsdMulti, 'USD')}) no cubre el total (${monto(totalUsd, 'USD')}).`); setSaving(false); return; }
-        await pagarOrdenCompraMulti({ orden: o, cajaId, legs, factura, motivoPago: motivoPago || null, actorEmail: actor, actorName });
+        await pagarOrdenCompraMulti({ orden: o, cajaId, legs, factura, motivoPago: motivoPago || null, seriales: pagaUsdEfectivo ? seriales : null, actorEmail: actor, actorName });
         notify(`OC ${o.oc_codigo ?? o.codigo} pagada · multipago ${monto(sumUsdMulti, 'USD')}`, 'success', { link: '#/app/tesoreria' });
         onPaid();
         return;
@@ -1558,7 +1903,7 @@ function PagarOrdenModal({ row, cajas, actor, actorName, onClose, onPaid }: {
       if (excedeTotalSimple) { setError(`No podés pagar más que el total de la OC (${monto(totalUsd, 'USD')}). El monto ingresado equivale a ${monto(montoUsdSimple, 'USD')}.`); setSaving(false); return; }
       await pagarOrdenCompra({
         orden: o, cajaId, monto: Number(montoStr) || 0,
-        factura, motivoPago: motivoPago || null, actorEmail: actor, actorName,
+        factura, motivoPago: motivoPago || null, seriales: pagaUsdEfectivo ? seriales : null, actorEmail: actor, actorName,
       });
       notify(`OC ${o.oc_codigo ?? o.codigo} pagada · ${monto(Number(montoStr) || 0, moneda)}`, 'success', { link: '#/app/tesoreria' });
       onPaid();
@@ -1783,6 +2128,41 @@ function PagarOrdenModal({ row, cajas, actor, actorName, onClose, onPaid }: {
             </small>
           </div>
         )}
+        {/* Seriales de los billetes entregados (solo al pagar con USD físico). */}
+        {pagaUsdEfectivo && (
+          <div className="card" style={{ marginBottom: '.75rem', borderColor: 'var(--brand, #ff8a00)' }}>
+            <div className="card-title" style={{ marginBottom: '.4rem' }}>
+              Seriales de los billetes entregados <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span>
+            </div>
+            <div style={{ display: 'flex', gap: '.5rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <div className="form-row" style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
+                <label style={{ fontSize: '.72rem' }}>Serial del billete</label>
+                <input className="input mono" value={serialInput}
+                  onChange={(e) => setSerialInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); agregarSerial(); } }}
+                  placeholder="Ej.: AB 1234567 C" />
+              </div>
+              <button type="button" className="btn btn-ghost" onClick={agregarSerial}>+ Agregar</button>
+            </div>
+            {seriales.length > 0 ? (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '.4rem', marginTop: '.5rem' }}>
+                {seriales.map((s, i) => (
+                  <span key={s} className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '.35rem', background: 'var(--bg-1)' }}>
+                    <span className="muted">{i + 1}.</span><span className="mono">{s}</span>
+                    <button type="button" className="btn btn-sm btn-ghost" style={{ padding: '0 .25rem', lineHeight: 1 }}
+                      title="Quitar" onClick={() => quitarSerial(s)}>✕</button>
+                  </span>
+                ))}
+                <span className="muted" style={{ alignSelf: 'center', fontSize: '.8rem' }}>{seriales.length} billete(s)</span>
+              </div>
+            ) : (
+              <small className="muted" style={{ display: 'block', marginTop: '.4rem' }}>
+                Agregá un serial por billete. Quedan registrados con el pago.
+              </small>
+            )}
+          </div>
+        )}
+
         <div className="form-grid">
           <div className="form-row">
             <label>Comprobante (PDF o imagen) {comprobanteOpcional ? '(opcional)' : '*'}</label>

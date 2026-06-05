@@ -513,6 +513,8 @@ export interface Orden {
   recibida_en?: string | null;
   /** Compras a crédito: total abonado acumulado. */
   abonado_total?: number | null;
+  /** Seriales de los billetes entregados al pagar la OC en USD físico (efectivo). */
+  seriales_billetes?: string[] | null;
   finalizada_por?: string | null;
   finalizada_en?: string | null;
   rechazada_por?: string | null;
@@ -537,6 +539,20 @@ export interface AbonoCredito {
   comprobante_path?: string | null;
   comprobante_nombre?: string | null;
   at: string;
+}
+
+/** Personal de nómina (no necesariamente usuario del sistema). */
+export interface Personal {
+  id: string;
+  nombre: string;
+  apellido: string;
+  cedula?: string | null;
+  cargo?: string | null;
+  departamento?: string | null;
+  sueldo_base: number;
+  activo: boolean;
+  created_at: string;
+  created_by?: string | null;
 }
 
 export interface Factura {

@@ -814,6 +814,8 @@ alter table public.ordenes add column if not exists recibido_total numeric;  -- 
 alter table public.ordenes add column if not exists recibida_por   text;
 alter table public.ordenes add column if not exists recibida_en    timestamptz;
 alter table public.ordenes add column if not exists abonado_total  numeric default 0;  -- caché Σ abonos (crédito)
+-- Seriales de los billetes entregados cuando se paga una OC en USD físico (efectivo).
+alter table public.ordenes add column if not exists seriales_billetes text[];
 
 -- Abonos de compras a crédito (cada abono es un egreso real de caja vía pagarOrden).
 create table if not exists public.abonos_credito (
@@ -831,6 +833,26 @@ create index if not exists idx_abonos_orden on public.abonos_credito(orden_id, a
 alter table public.abonos_credito enable row level security;
 create policy "abonos read auth"  on public.abonos_credito for select using (auth.role() = 'authenticated');
 create policy "abonos write staff" on public.abonos_credito for all using (public.is_staff()) with check (public.is_staff());
+
+-- Personal (nómina): TODO el personal a pagar, tengan o no usuario del sistema.
+-- "Usuarios" = los del login; "Personal" engloba a todos para la nómina. Se
+-- administra y se paga desde Tesorería → Pago a personal.
+create table if not exists public.personal (
+  id           uuid primary key default gen_random_uuid(),
+  nombre       text not null,
+  apellido     text not null default '',
+  cedula       text,
+  cargo        text,
+  departamento text,
+  sueldo_base  numeric not null default 0,
+  activo       boolean not null default true,
+  created_at   timestamptz not null default now(),
+  created_by   text
+);
+create index if not exists idx_personal_activo on public.personal(activo);
+alter table public.personal enable row level security;
+create policy "personal read auth"  on public.personal for select using (auth.role() = 'authenticated');
+create policy "personal write staff" on public.personal for all using (public.is_staff()) with check (public.is_staff());
 
 -- Storage: bucket privado `ofertas-pdf` para las cotizaciones (PDF) de los proveedores.
 -- El analista carga las ofertas, así que la escritura es para STAFF (admin + analista),
