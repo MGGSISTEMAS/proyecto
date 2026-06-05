@@ -522,6 +522,32 @@ create table if not exists public.config (
 );
 
 -- ─────────────────────────────────────────────────────────────
+-- 8.b taxonomias — catálogos compartidos (categorías, unidades,
+--     departamentos, monedas) por `scope`. Alimentan los selects
+--     de Inventario/Proveedores/Usuarios además de los valores ya
+--     presentes en cada tabla. Únicos por (scope, valor).
+-- ─────────────────────────────────────────────────────────────
+create table if not exists public.taxonomias (
+  id         uuid primary key default gen_random_uuid(),
+  scope      text not null,
+  valor      text not null,
+  created_at timestamptz not null default now(),
+  created_by text,
+  constraint taxonomias_scope_valor_unique unique (scope, valor)
+);
+alter table public.taxonomias enable row level security;
+-- Lectura/alta abiertas (catálogo); borrar/renombrar requiere sesión.
+-- (El gate de quién administra el catálogo vive en el front.)
+drop policy if exists "taxonomias_read_all"    on public.taxonomias;
+drop policy if exists "taxonomias_write_all"   on public.taxonomias;
+drop policy if exists "taxonomias_delete_auth" on public.taxonomias;
+drop policy if exists "taxonomias_update_auth" on public.taxonomias;
+create policy "taxonomias_read_all"    on public.taxonomias for select using (true);
+create policy "taxonomias_write_all"   on public.taxonomias for insert with check (true);
+create policy "taxonomias_delete_auth" on public.taxonomias for delete using (auth.role() = 'authenticated');
+create policy "taxonomias_update_auth" on public.taxonomias for update using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+
+-- ─────────────────────────────────────────────────────────────
 -- 9.b tasa_cambio (Tesorería · historial de tasas BCV USD/EUR)
 --     La Edge Function `tasa-bcv` la actualiza a diario; snapshot
 --     del día en config (key 'tesoreria.tasa_hoy').
