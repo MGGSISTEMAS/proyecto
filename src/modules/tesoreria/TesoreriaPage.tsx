@@ -1,15 +1,17 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { EmptyState } from '@/shared/ui/EmptyState';
 import { Modal } from '@/shared/ui/Modal';
 import { toast } from '@/shared/ui/Toast';
 import { notify } from '@/shared/lib/notify';
-import { dateTime, date as fmtDate, dosDecimales } from '@/shared/lib/format';
+import { dateTime, date as fmtDate, dosDecimales, redondearArriba5 } from '@/shared/lib/format';
 import { useRealtime } from '@/shared/lib/useRealtime';
 import { useSession } from '@/modules/auth/authStore';
 import { usePermissions } from '@/modules/auth/PermissionsContext';
 import { GestionarCajasModal } from '@/modules/salidas/GestionarCajasModal';
-import { listPersonal, crearPersonal, actualizarPersonal, setPersonalActivo, eliminarPersonal, type PersonalInput } from './personal.repository';
-import type { Personal } from '@/shared/lib/types';
+import {
+  listRenglonesPorPagar, countRenglonesPorPagar, pagarRenglon, getRenglonById, urlComprobanteNomina, labelMotivoNomina,
+} from '@/modules/rrhh/nomina.repository';
+import type { NominaRenglon } from '@/shared/lib/types';
 import type { Caja, MovimientoCaja, Orden } from '@/shared/lib/types';
 import { HistorialTasasModal } from './HistorialTasasModal';
 import { TasasView } from './TasasView';
@@ -25,7 +27,7 @@ import type { MonedaCaja, CuentaCaja, CajaSaldo, CajaLote } from '@/shared/lib/t
 import { BarChart, type ChartPoint } from '@/shared/ui/Chart';
 import {
   listCajasActivas, listCentrosAcopio,
-  registrarGasto, pagarPersonal, disponibilidadFinanciera, listLibroMayor,
+  registrarGasto, disponibilidadFinanciera, listLibroMayor,
   type Disponibilidad,
 } from './tesoreria.repository';
 import {
@@ -49,7 +51,7 @@ const TIPO_MOV_LABEL: Record<string, string> = {
   traslado_entrada: '↔ Traslado (entra)', ajuste: '⚙ Ajuste',
 };
 const CAT_LABEL: Record<string, string> = {
-  gasto: 'Gasto', pago_personal: 'Pago a personal', pago_oc: 'Pago de compra',
+  gasto: 'Gasto', pago_personal: 'Pago a personal', pago_oc: 'Pago de compra', pago_nomina: 'Pago de nómina',
 };
 
 /** Formatea un monto con el símbolo de su moneda (2 decimales). */
@@ -74,6 +76,7 @@ export function TesoreriaPage() {
   const [cajaSel, setCajaSel] = useState<Caja | null>(null);
   const [porPagarCount, setPorPagarCount] = useState(0);
   const [creditosCount, setCreditosCount] = useState(0);
+  const [nominaCount, setNominaCount] = useState(0);
   const [vista, setVista] = useState<'tesoreria' | 'tasas' | 'movimientos'>('tesoreria');
   const [correoMovOpen, setCorreoMovOpen] = useState(false);
   const [movSel, setMovSel] = useState<MovimientoCaja | null>(null);
@@ -89,7 +92,7 @@ export function TesoreriaPage() {
   const [transfers, setTransfers] = useState<TransferenciaInter[]>([]);
 
   const reload = useCallback(async () => {
-    const [d, cs, sal, mov, pp, cr, tr] = await Promise.all([
+    const [d, cs, sal, mov, pp, cr, tr, nc] = await Promise.all([
       disponibilidadFinanciera(),
       listCajasActivas(),
       listSaldos().catch(() => [] as CajaSaldo[]),
@@ -97,13 +100,14 @@ export function TesoreriaPage() {
       listOrdenesPorPagar().catch(() => [] as OrdenPorPagar[]),
       listOrdenesEnCredito().catch(() => [] as OrdenPorPagar[]),
       listTransferenciasInter().catch(() => [] as TransferenciaInter[]),
+      countRenglonesPorPagar().catch(() => 0),
     ]);
     const crPendientes = cr.filter((x) => (Number(x.orden.total) - (Number(x.orden.abonado_total) || 0)) > 0.01);
-    setDisp(d); setCajas(cs); setSaldos(sal); setLibro(mov); setPorPagarCount(pp.length); setCreditosCount(crPendientes.length); setTransfers(tr);
+    setDisp(d); setCajas(cs); setSaldos(sal); setLibro(mov); setPorPagarCount(pp.length); setCreditosCount(crPendientes.length); setTransfers(tr); setNominaCount(nc);
   }, [fMoneda, fTipo, fDesde, fHasta]);
 
   // Realtime: multiusuario · lo que registra otro usuario (o el otro sistema) se refleja acá.
-  useRealtime(['movimientos_caja', 'caja_saldos', 'cajas', 'transferencias_inter', 'ordenes'], () => { void reload(); });
+  useRealtime(['movimientos_caja', 'caja_saldos', 'cajas', 'transferencias_inter', 'ordenes', 'nomina_renglones'], () => { void reload(); });
 
   useEffect(() => {
     setLoading(true);
@@ -166,9 +170,11 @@ export function TesoreriaPage() {
                 <button className="btn btn-primary" onClick={() => setModal('creditos')}>
                   💳 CUENTAS POR PAGAR (CRÉDITOS){creditosCount ? ` (${creditosCount})` : ''}
                 </button>
+                <button className={nominaCount > 0 ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setModal('pago')}>
+                  {nominaCount > 0 ? `💸 PAGAR NÓMINA (${nominaCount})` : '👥 Pago a personal'}
+                </button>
                 <button className="btn btn-ghost" onClick={() => setModal('gasto')}>− Gasto</button>
                 <button className="btn btn-ghost" onClick={() => setModal('traslado')}>↔ Traspaso de dinero</button>
-                <button className="btn btn-ghost" onClick={() => setModal('pago')}>👥 Pago a personal</button>
                 <button className="btn btn-ghost" onClick={() => setModal('cajas')}>🏦 Cajas</button>
               </>
             )}
@@ -273,7 +279,7 @@ export function TesoreriaPage() {
       {correoMovOpen && <EnviarReporteModal movs={libro} meta={reporteMeta()} defaultEmail={actor} onClose={() => setCorreoMovOpen(false)} />}
       {modal === 'gasto' && <GastoModal cajas={cajas} actor={actor} actorName={actorName} onClose={() => setModal('none')} onSaved={cerrarYRecargar} />}
       {modal === 'traslado' && <TrasladoModal cajas={cajas} actor={actor} actorName={actorName} onClose={() => setModal('none')} onSaved={cerrarYRecargar} />}
-      {modal === 'pago' && <PagoPersonalModal cajas={cajas} actor={actor} actorName={actorName} onClose={() => setModal('none')} onSaved={cerrarYRecargar} />}
+      {modal === 'pago' && <NominaPorPagarModal cajas={cajas} actor={actor} actorName={actorName} onClose={() => setModal('none')} onPaid={reload} />}
       {modal === 'cajas' && <GestionarCajasModal actor={actor} actorName={actorName} onClose={() => setModal('none')} onCambioAplicado={reload} />}
       {modal === 'tasas' && <TasasGate onClose={() => setModal('none')} />}
       {modal === 'conversor' && <ConversorModal onClose={() => setModal('none')} />}
@@ -292,6 +298,8 @@ function MovimientoDetalleModal({ mov, defaultEmail, onClose }: { mov: Movimient
     || (mov.tipo === 'ajuste' && Number(mov.saldo_despues) < Number(mov.saldo_antes));
   const [orden, setOrden] = useState<Orden | null>(null);
   const [cargandoOrden, setCargandoOrden] = useState(false);
+  const [renglon, setRenglon] = useState<NominaRenglon | null>(null);
+  const [cargandoReng, setCargandoReng] = useState(false);
   const [abriendo, setAbriendo] = useState(false);
   const [generandoPdf, setGenerandoPdf] = useState(false);
   const [correoOpen, setCorreoOpen] = useState(false);
@@ -307,6 +315,16 @@ function MovimientoDetalleModal({ mov, defaultEmail, onClose }: { mov: Movimient
       .finally(() => setCargandoOrden(false));
   }, [mov.ref_orden_id]);
 
+  // Si es un pago de nómina, traemos el renglón (persona, período, seriales, comprobante).
+  useEffect(() => {
+    if (!mov.ref_nomina_renglon_id) { setRenglon(null); return; }
+    setCargandoReng(true);
+    getRenglonById(mov.ref_nomina_renglon_id)
+      .then((r) => setRenglon(r))
+      .catch(() => setRenglon(null))
+      .finally(() => setCargandoReng(false));
+  }, [mov.ref_nomina_renglon_id]);
+
   async function verComprobante(path: string) {
     setAbriendo(true);
     try {
@@ -315,8 +333,17 @@ function MovimientoDetalleModal({ mov, defaultEmail, onClose }: { mov: Movimient
     } catch { toast('No se pudo abrir el comprobante', 'error'); }
     finally { setAbriendo(false); }
   }
+  async function verComprobanteNomina(path: string) {
+    setAbriendo(true);
+    try {
+      const url = await urlComprobanteNomina(path);
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch { toast('No se pudo abrir el comprobante', 'error'); }
+    finally { setAbriendo(false); }
+  }
 
   const seriales = orden?.seriales_billetes ?? [];
+  const serialesNomina = renglon?.seriales_billetes ?? [];
 
   async function descargarPdf() {
     setGenerandoPdf(true);
@@ -400,6 +427,53 @@ function MovimientoDetalleModal({ mov, defaultEmail, onClose }: { mov: Movimient
                     {abriendo ? 'Abriendo…' : `📎 Ver comprobante${orden.factura_nombre ? ` · ${orden.factura_nombre}` : ''}`}
                   </button>
                 ) : <span className="muted" style={{ fontSize: '.84rem' }}>No se subió comprobante (pago en efectivo, opcional).</span>}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Nómina pagada (si el movimiento es un pago de nómina) */}
+      {mov.ref_nomina_renglon_id && (
+        <div className="card" style={{ marginBottom: '.75rem' }}>
+          <div className="card-title" style={{ marginBottom: '.4rem' }}>Nómina pagada</div>
+          {cargandoReng && <div className="muted" style={{ fontSize: '.84rem' }}>Cargando el renglón…</div>}
+          {!cargandoReng && !renglon && <div className="muted" style={{ fontSize: '.84rem' }}>No se pudo cargar el renglón vinculado.</div>}
+          {!cargandoReng && renglon && (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '.35rem .9rem', fontSize: '.84rem' }}>
+                <div><span className="muted">Trabajador:</span> <strong>{renglon.nombre}</strong></div>
+                <div><span className="muted">Nómina:</span> <strong className="mono">{renglon.periodo?.codigo ?? '—'}</strong></div>
+                <div><span className="muted">Motivo:</span> <strong>{labelMotivoNomina(renglon.periodo?.tipo)}</strong></div>
+                <div><span className="muted">Departamento:</span> {renglon.departamento || '—'}</div>
+                <div><span className="muted">Días:</span> <strong>{renglon.dias_trabajados}</strong></div>
+                <div><span className="muted">Bruto:</span> <strong className="mono">{monto(renglon.salario_bruto, 'USD')}</strong></div>
+                <div><span className="muted">Deducciones:</span> <strong className="mono">{monto(round2((Number(renglon.deduc_anticipos) || 0) + (Number(renglon.deduc_prestamos) || 0)), 'USD')}</strong></div>
+                <div><span className="muted">Neto:</span> <strong className="mono" style={{ color: 'var(--success)' }}>{monto(renglon.neto_usd, 'USD')}</strong></div>
+                {renglon.tasa_pago != null && renglon.tasa_pago > 0 && <div><span className="muted">Tasa aplicada:</span> <strong className="mono">{monto(renglon.tasa_pago, 'Bs')} / $</strong></div>}
+              </div>
+
+              <div style={{ marginTop: '.6rem' }}>
+                <div className="muted" style={{ fontSize: '.78rem', marginBottom: '.25rem' }}>Seriales de los billetes entregados</div>
+                {serialesNomina.length ? (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '.4rem' }}>
+                    {serialesNomina.map((s, i) => (
+                      <span key={s} className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '.35rem', background: 'var(--bg-1)' }}>
+                        <span className="muted">{i + 1}.</span><span className="mono">{s}</span>
+                      </span>
+                    ))}
+                    <span className="muted" style={{ alignSelf: 'center', fontSize: '.8rem' }}>{serialesNomina.length} billete(s)</span>
+                  </div>
+                ) : <span className="muted" style={{ fontSize: '.84rem' }}>No se registraron seriales en este pago.</span>}
+              </div>
+
+              <div style={{ marginTop: '.6rem' }}>
+                <div className="muted" style={{ fontSize: '.78rem', marginBottom: '.25rem' }}>Comprobante de pago</div>
+                {renglon.comprobante_path ? (
+                  <button className="btn btn-sm btn-ghost" disabled={abriendo} onClick={() => verComprobanteNomina(renglon.comprobante_path!)}>
+                    {abriendo ? 'Abriendo…' : `📎 Ver comprobante${renglon.comprobante_nombre ? ` · ${renglon.comprobante_nombre}` : ''}`}
+                  </button>
+                ) : <span className="muted" style={{ fontSize: '.84rem' }}>No se subió comprobante (opcional).</span>}
               </div>
             </>
           )}
@@ -574,19 +648,53 @@ function CajaDetalleModal({ caja, canWrite, actor, actorName, onClose, onChanged
             <tbody>
               {loading && <tr><td colSpan={6} className="muted" style={{ textAlign: 'center' }}>Cargando…</td></tr>}
               {!loading && !saldos.length && <tr><td colSpan={6}><EmptyState message="Sin saldos · ingresá dinero abajo" /></td></tr>}
-              {!loading && saldos.map((s) => (
-                <tr key={s.id}>
-                  <td>{s.cuenta === 'general' ? '—' : s.cuenta === 'juridica' ? 'Jurídica' : 'Personal'}</td>
-                  <td><span className="badge">{s.moneda}</span></td>
-                  <td className="mono" style={{ textAlign: 'right' }}>{monto(s.saldo, s.moneda)}</td>
-                  <td className="mono" style={{ textAlign: 'right' }}>{s.moneda === 'Bs' ? (mercado?.bcvUsd ? `BCV ${Number(mercado.bcvUsd).toLocaleString('es-VE', { maximumFractionDigits: 4 })}` : '—') : (s.tasa_prom != null ? Number(s.tasa_prom).toLocaleString('es-VE', { maximumFractionDigits: 4 }) : '—')}</td>
-                  <td className="mono" style={{ textAlign: 'right' }}>
-                    {monto(equivBs(s), 'Bs')}
-                    {s.moneda === 'Bs' && mercado?.bcvUsd ? <div className="muted" style={{ fontSize: '.7rem' }}>≈ {monto(Number(s.saldo) / mercado.bcvUsd, 'USD')} a BCV</div> : null}
-                  </td>
-                  <td style={{ textAlign: 'right' }}><button className="btn btn-sm btn-ghost" onClick={() => verLotes(s)}>Trazabilidad</button></td>
-                </tr>
-              ))}
+              {!loading && saldos.map((s) => {
+                const bcv = mercado?.bcvUsd ?? null;
+                const prom = s.tasa_prom != null ? Number(s.tasa_prom) : null;
+                const saldoN = Number(s.saldo) || 0;
+                const mostrarBcvRow = s.moneda !== 'Bs' && bcv != null && prom != null && prom > 0;
+                const equivProm = prom != null ? saldoN * prom : 0;
+                const equivBcv = bcv != null ? saldoN * bcv : 0;
+                // Margen de ahorro: cuánto menos vale en Bs a tasa BCV respecto a la tasa promedio de compra.
+                const margen = mostrarBcvRow && prom && bcv != null ? ((prom - bcv) / prom) * 100 : null;
+                return (
+                  <Fragment key={s.id}>
+                    <tr>
+                      <td>{s.cuenta === 'general' ? '—' : s.cuenta === 'juridica' ? 'Jurídica' : 'Personal'}</td>
+                      <td><span className="badge">{s.moneda}</span></td>
+                      <td className="mono" style={{ textAlign: 'right' }}>{monto(s.saldo, s.moneda)}</td>
+                      <td className="mono" style={{ textAlign: 'right' }}>{s.moneda === 'Bs' ? (mercado?.bcvUsd ? `BCV ${Number(mercado.bcvUsd).toLocaleString('es-VE', { maximumFractionDigits: 4 })}` : '—') : (prom != null ? Number(prom).toLocaleString('es-VE', { maximumFractionDigits: 4 }) : '—')}</td>
+                      <td className="mono" style={{ textAlign: 'right' }}>
+                        {monto(equivBs(s), 'Bs')}
+                        {s.moneda === 'Bs' && mercado?.bcvUsd ? <div className="muted" style={{ fontSize: '.7rem' }}>≈ {monto(Number(s.saldo) / mercado.bcvUsd, 'USD')} a BCV</div> : null}
+                      </td>
+                      <td style={{ textAlign: 'right' }}><button className="btn btn-sm btn-ghost" onClick={() => verLotes(s)}>Trazabilidad</button></td>
+                    </tr>
+                    {mostrarBcvRow && (
+                      <tr style={{ background: 'var(--bg-1)' }}>
+                        <td></td>
+                        <td className="muted" style={{ fontSize: '.72rem' }}>≡ a BCV</td>
+                        <td className="mono muted" style={{ textAlign: 'right', fontSize: '.78rem' }}>—</td>
+                        <td className="mono" style={{ textAlign: 'right' }}>BCV {Number(bcv).toLocaleString('es-VE', { maximumFractionDigits: 4 })}</td>
+                        <td className="mono" style={{ textAlign: 'right' }}>
+                          {monto(equivBcv, 'Bs')}
+                          <div className="muted" style={{ fontSize: '.7rem' }}>a tasa prom. {monto(equivProm, 'Bs')}</div>
+                        </td>
+                        <td style={{ textAlign: 'right' }}>
+                          {margen != null && (
+                            <div style={{ lineHeight: 1.15 }}>
+                              <div className="muted" style={{ fontSize: '.6rem', letterSpacing: '.02em' }}>MARGEN AHORRO</div>
+                              <strong className="mono" style={{ color: '#16c784', fontWeight: 800, fontSize: '.98rem' }} title="Ahorro pagando a tasa BCV respecto a la tasa promedio de compra de este saldo">
+                                {margen.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} %
+                              </strong>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -644,6 +752,20 @@ function CajaDetalleModal({ caja, canWrite, actor, actorName, onClose, onChanged
                   </tr>
                 ))}
               </tbody>
+              {lotes.length > 0 && (() => {
+                const tot = lotes.reduce((a, l) => a + (Number(l.monto) || 0), 0);
+                const prom = tot > 0 ? lotes.reduce((a, l) => a + (Number(l.monto) || 0) * (Number(l.tasa_bs) || 0), 0) / tot : 0;
+                return (
+                  <tfoot>
+                    <tr>
+                      <td style={{ fontWeight: 700 }}>Total</td>
+                      <td className="mono" style={{ textAlign: 'right', fontWeight: 700 }}>{monto(tot, lotesDe.moneda)}</td>
+                      <td className="mono" style={{ textAlign: 'right', fontWeight: 800, color: '#16c784' }} title="Promedio ponderado por monto de los lotes">{prom.toLocaleString('es-VE', { maximumFractionDigits: 4 })}</td>
+                      <td colSpan={2} className="muted" style={{ fontSize: '.72rem' }}>Promedio ponderado de las tasas de ingreso</td>
+                    </tr>
+                  </tfoot>
+                );
+              })()}
             </table>
           </div>
         </div>
@@ -706,10 +828,34 @@ function CajaDetalleModal({ caja, canWrite, actor, actorName, onClose, onChanged
               <input className="input" value={origen} onChange={(e) => setOrigen(e.target.value)} placeholder="Binance, efectivo, transferencia…" />
             </div>
           </div>
+          {moneda !== 'Bs' && (Number(montoStr) || 0) > 0 && (Number(tasaStr) || 0) > 0 && (() => {
+            const saldoActual = saldos.find((s) => s.moneda === moneda && s.cuenta === cuenta);
+            const sa = Number(saldoActual?.saldo) || 0;
+            const tp = Number(saldoActual?.tasa_prom) || 0;
+            const mn = Number(montoStr) || 0;
+            const tn = Number(tasaStr) || 0;
+            const nuevoSaldo = sa + mn;
+            const nuevoProm = nuevoSaldo > 0 ? (sa * tp + mn * tn) / nuevoSaldo : tn;
+            const f4 = (n: number) => n.toLocaleString('es-VE', { maximumFractionDigits: 4 });
+            return (
+              <div className="card" style={{ marginTop: '.5rem', padding: '.55rem .7rem', background: 'var(--bg-1)' }}>
+                <div style={{ fontSize: '.83rem' }}>
+                  Entran <strong className="mono">{monto(mn, moneda)}</strong> a tasa <strong className="mono">{f4(tn)}</strong> Bs.
+                  {sa > 0 ? (
+                    <> Ya tenías <strong className="mono">{monto(sa, moneda)}</strong> a prom. <strong className="mono">{f4(tp)}</strong> → quedan{' '}
+                      <strong className="mono">{monto(nuevoSaldo, moneda)}</strong> a <strong>promedio ponderado</strong>{' '}
+                      <strong className="mono" style={{ color: '#16c784', fontWeight: 800 }}>{f4(nuevoProm)}</strong> Bs.</>
+                  ) : (
+                    <> Es el primer lote → promedio <strong className="mono" style={{ color: '#16c784', fontWeight: 800 }}>{f4(tn)}</strong> Bs.</>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
           <div style={{ textAlign: 'right', marginTop: '.5rem' }}>
             <button type="submit" className="btn btn-success" disabled={saving}>{saving ? 'Ingresando…' : '+ Ingresar'}</button>
           </div>
-          <small className="muted">El Bs se maneja en dos cuentas: <strong>jurídica</strong> y <strong>personal</strong>. Las divisas guardan su tasa de compra para el promedio ponderado.</small>
+          <small className="muted">El Bs se maneja en dos cuentas: <strong>jurídica</strong> y <strong>personal</strong>. Las divisas guardan su tasa de compra; cada ingreso es un <strong>lote</strong> con su tasa, y el saldo muestra el <strong>promedio ponderado</strong> (ver Trazabilidad).</small>
         </form>
       )}
 
@@ -1092,208 +1238,244 @@ function EnviarReporteModal({ movs, meta, defaultEmail, onClose }: {
   );
 }
 
-function PagoPersonalModal({ cajas, actor, actorName, onClose, onSaved }: {
-  cajas: Caja[]; actor: string; actorName: string | null; onClose: () => void; onSaved: () => void;
+/* ───────── Pagar nómina: cola de renglones cargados por RRHH ───────── */
+function NominaPorPagarModal({ cajas, actor, actorName, onClose, onPaid }: {
+  cajas: Caja[]; actor: string; actorName: string | null; onClose: () => void; onPaid: () => void;
 }) {
-  const [cajaId, setCajaId] = useState(cajas[0]?.id ?? '');
-  const [concepto, setConcepto] = useState('');
-  const [personas, setPersonas] = useState<Personal[]>([]);
-  const [montos, setMontos] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [gestionOpen, setGestionOpen] = useState(false);
-  const caja = cajas.find((c) => c.id === cajaId) ?? null;
-
-  const cargarPersonal = useCallback(() => {
-    listPersonal(true).then(setPersonas).catch(() => setPersonas([]));
-  }, []);
-  useEffect(() => { cargarPersonal(); }, [cargarPersonal]);
-  useRealtime(['personal'], cargarPersonal);
-
-  // Precarga el sueldo base como monto sugerido (editable) de cada persona.
-  function precargarSueldos() {
-    setMontos((m) => {
-      const next = { ...m };
-      for (const p of personas) {
-        if ((next[p.id] === undefined || next[p.id] === '') && Number(p.sueldo_base) > 0) {
-          next[p.id] = String(p.sueldo_base);
-        }
-      }
-      return next;
-    });
-  }
-
-  const seleccion = personas
-    .map((p) => ({ p, monto: Number(montos[p.id]) || 0 }))
-    .filter((x) => x.monto > 0);
-  const total = useMemo(() => Math.round(seleccion.reduce((a, x) => a + x.monto, 0) * 100) / 100, [seleccion]);
-
-  async function submit(e: FormEvent) {
-    e.preventDefault(); setError(null);
-    if (!cajaId) { setError('Elegí la caja.'); return; }
-    if (!seleccion.length) { setError('Indicá el monto de al menos una persona.'); return; }
-    setSaving(true);
-    try {
-      await pagarPersonal({
-        cajaId, concepto,
-        pagos: seleccion.map((x) => ({ usuarioId: x.p.id, nombre: `${x.p.nombre} ${x.p.apellido}`.trim(), monto: x.monto })),
-        actor, actorName,
-      });
-      notify(`Pago a personal: ${monto(total, caja?.moneda ?? 'Bs')} · ${seleccion.length} persona(s)`, 'success', { link: '#/app/tesoreria' });
-      onSaved();
-    } catch (err) { setError(err instanceof Error ? err.message : 'No se pudo pagar.'); setSaving(false); }
-  }
-
-  return (
-    <Modal title="Pago a personal (nómina)" size="lg" onClose={onClose} footer={
-      <><button className="btn btn-ghost" onClick={onClose} disabled={saving}>Cancelar</button>
-      <button type="submit" form="teso-pago" className="btn btn-primary" disabled={saving}>{saving ? 'Pagando…' : `Pagar ${monto(total, caja?.moneda ?? 'Bs')}`}</button></>
-    }>
-      <form id="teso-pago" onSubmit={submit}>
-        {error && <div className="card" style={{ borderColor: 'var(--danger)', marginBottom: '.75rem' }}><strong>Error:</strong> {error}</div>}
-        <div className="form-grid">
-          <div className="form-row">
-            <label>Caja (moneda)</label>
-            <select className="select" value={cajaId} onChange={(e) => setCajaId(e.target.value)}>
-              {cajas.map((c) => <option key={c.id} value={c.id}>{c.nombre} · {monto(c.saldo, c.moneda)}</option>)}
-            </select>
-          </div>
-          <div className="form-row"><label>Concepto</label><input className="input" value={concepto} onChange={(e) => setConcepto(e.target.value)} placeholder="Quincena, bono, etc." /></div>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap', margin: '.4rem 0 .5rem' }}>
-          <div className="muted" style={{ fontSize: '.82rem' }}>{personas.length} persona(s) en nómina</div>
-          <div style={{ display: 'flex', gap: '.4rem', flexWrap: 'wrap' }}>
-            <button type="button" className="btn btn-sm btn-ghost" onClick={precargarSueldos} disabled={!personas.length}>↺ Cargar sueldos base</button>
-            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setGestionOpen(true)}>👥 Personal</button>
-          </div>
-        </div>
-        <div className="table-wrap" style={{ maxHeight: 320, overflowY: 'auto' }}>
-          <table className="table" style={{ fontSize: '.85rem' }}>
-            <thead><tr><th>Persona</th><th>Departamento</th><th>Cargo</th><th style={{ textAlign: 'right', width: 110 }}>Sueldo base</th><th style={{ width: 160 }}>Monto a pagar</th></tr></thead>
-            <tbody>
-              {!personas.length && <tr><td colSpan={5} className="muted" style={{ textAlign: 'center' }}>Sin personal registrado. Usá <strong>👥 Personal</strong> para agregar.</td></tr>}
-              {personas.map((p) => (
-                <tr key={p.id}>
-                  <td>{p.nombre} {p.apellido}</td>
-                  <td className="muted">{p.departamento || '—'}</td>
-                  <td className="muted">{p.cargo || '—'}</td>
-                  <td className="mono" style={{ textAlign: 'right' }}>{Number(p.sueldo_base) > 0 ? monto(p.sueldo_base, caja?.moneda ?? 'Bs') : '—'}</td>
-                  <td><input className="input mono" type="number" min={0} step="any" value={montos[p.id] ?? ''} onChange={(e) => setMontos((m) => ({ ...m, [p.id]: dosDecimales(e.target.value) }))} placeholder="0,00" /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </form>
-
-      {gestionOpen && (
-        <GestionarPersonalModal actor={actor} onClose={() => setGestionOpen(false)} onChanged={cargarPersonal} />
-      )}
-    </Modal>
-  );
-}
-
-/* ───────── Gestión del Personal (nómina): alta/edición/activar ───────── */
-function GestionarPersonalModal({ actor, onClose, onChanged }: {
-  actor: string; onClose: () => void; onChanged: () => void;
-}) {
-  const VACIO: PersonalInput = { nombre: '', apellido: '', cedula: '', cargo: '', departamento: '', sueldo_base: 0 };
-  const [lista, setLista] = useState<Personal[]>([]);
+  const [rows, setRows] = useState<NominaRenglon[]>([]);
   const [loading, setLoading] = useState(true);
-  const [editId, setEditId] = useState<string | null>(null);
-  const [form, setForm] = useState<PersonalInput>(VACIO);
-  const [guardando, setGuardando] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [pagar, setPagar] = useState<NominaRenglon | null>(null);
 
   const recargar = useCallback(async () => {
     setLoading(true);
-    try { setLista(await listPersonal(false)); }
-    catch (e) { toast(e instanceof Error ? e.message : 'No se pudo cargar el personal', 'error'); }
+    try { setRows(await listRenglonesPorPagar()); }
+    catch (e) { toast(e instanceof Error ? e.message : 'No se pudo cargar la nómina', 'error'); }
     finally { setLoading(false); }
   }, []);
   useEffect(() => { void recargar(); }, [recargar]);
-  useRealtime(['personal'], () => { void recargar(); });
+  useRealtime(['nomina_renglones'], () => { void recargar(); });
 
-  function editar(p: Personal) {
-    setEditId(p.id);
-    setForm({ nombre: p.nombre, apellido: p.apellido, cedula: p.cedula ?? '', cargo: p.cargo ?? '', departamento: p.departamento ?? '', sueldo_base: Number(p.sueldo_base) || 0 });
-    setError(null);
-  }
-  function limpiar() { setEditId(null); setForm(VACIO); setError(null); }
-
-  async function guardar(e: FormEvent) {
-    e.preventDefault(); setError(null);
-    if (!form.nombre.trim()) { setError('Indicá el nombre.'); return; }
-    setGuardando(true);
-    try {
-      if (editId) await actualizarPersonal(editId, form);
-      else await crearPersonal(form, actor);
-      toast(editId ? 'Personal actualizado' : 'Personal agregado', 'success');
-      limpiar();
-      await recargar();
-      onChanged();
-    } catch (err) { setError(err instanceof Error ? err.message : 'No se pudo guardar'); }
-    finally { setGuardando(false); }
-  }
-
-  async function toggleActivo(p: Personal) {
-    try { await setPersonalActivo(p.id, !p.activo); await recargar(); onChanged(); }
-    catch (e) { toast(e instanceof Error ? e.message : 'No se pudo cambiar', 'error'); }
-  }
-  async function borrar(p: Personal) {
-    if (!window.confirm(`¿Eliminar a ${p.nombre} ${p.apellido} de la nómina? (no afecta los pagos ya hechos)`)) return;
-    try { await eliminarPersonal(p.id); await recargar(); onChanged(); toast('Eliminado', 'success'); }
-    catch (e) { toast(e instanceof Error ? e.message : 'No se pudo eliminar', 'error'); }
-  }
+  const total = useMemo(() => round2(rows.reduce((a, r) => a + (Number(r.neto_usd) || 0), 0)), [rows]);
 
   return (
-    <Modal title="Personal (nómina)" size="lg" onClose={onClose} footer={
-      <button className="btn btn-ghost" onClick={onClose}>Cerrar</button>
-    }>
-      <form onSubmit={guardar} style={{ marginBottom: '.85rem' }}>
-        {error && <div className="card" style={{ borderColor: 'var(--danger)', marginBottom: '.6rem' }}><strong>Error:</strong> {error}</div>}
-        <div className="card" style={{ padding: '.75rem' }}>
-          <div className="card-title" style={{ marginBottom: '.5rem' }}>{editId ? 'Editar persona' : 'Agregar persona'}</div>
-          <div className="form-grid">
-            <div className="form-row"><label>Nombre *</label><input className="input" value={form.nombre} onChange={(e) => setForm((f) => ({ ...f, nombre: e.target.value }))} required autoFocus /></div>
-            <div className="form-row"><label>Apellido</label><input className="input" value={form.apellido ?? ''} onChange={(e) => setForm((f) => ({ ...f, apellido: e.target.value }))} /></div>
-            <div className="form-row"><label>Cédula</label><input className="input" value={form.cedula ?? ''} onChange={(e) => setForm((f) => ({ ...f, cedula: e.target.value }))} placeholder="V-12345678" /></div>
-            <div className="form-row"><label>Cargo</label><input className="input" value={form.cargo ?? ''} onChange={(e) => setForm((f) => ({ ...f, cargo: e.target.value }))} placeholder="Operador, supervisor…" /></div>
-            <div className="form-row"><label>Departamento</label><input className="input" value={form.departamento ?? ''} onChange={(e) => setForm((f) => ({ ...f, departamento: e.target.value }))} placeholder="Mina, Administración…" /></div>
-            <div className="form-row"><label>Sueldo base</label><input className="input mono" type="number" min={0} step="any" value={form.sueldo_base ?? 0} onChange={(e) => setForm((f) => ({ ...f, sueldo_base: Number(e.target.value) || 0 }))} placeholder="0,00" /></div>
-          </div>
-          <div style={{ display: 'flex', gap: '.5rem', marginTop: '.5rem' }}>
-            <button type="submit" className="btn btn-primary" disabled={guardando}>{guardando ? 'Guardando…' : editId ? 'Guardar cambios' : '+ Agregar'}</button>
-            {editId && <button type="button" className="btn btn-ghost" onClick={limpiar} disabled={guardando}>Cancelar edición</button>}
-          </div>
-        </div>
-      </form>
-
-      <div className="table-wrap" style={{ maxHeight: 300, overflowY: 'auto' }}>
+    <Modal title="Pagar nómina" size="xl" onClose={onClose} footer={<button className="btn btn-ghost" onClick={onClose}>Cerrar</button>}>
+      <div className="muted" style={{ marginBottom: '.6rem', fontSize: '.86rem' }}>
+        Renglones cargados desde <strong>RRHH</strong>. Tesorería paga uno a uno (efectivo USD con seriales, o Bs a tasa BCV) y adjunta el comprobante (opcional).
+        {rows.length > 0 && <> · {rows.length} pendiente(s) · Total <strong className="mono">{monto(total, 'USD')}</strong></>}
+      </div>
+      <div className="table-wrap" style={{ maxHeight: 440, overflowY: 'auto' }}>
         <table className="table" style={{ fontSize: '.84rem' }}>
-          <thead><tr><th>Persona</th><th>Departamento</th><th>Cargo</th><th style={{ textAlign: 'right' }}>Sueldo base</th><th style={{ textAlign: 'center' }}>Estado</th><th style={{ textAlign: 'center', width: 150 }}>Acciones</th></tr></thead>
+          <thead><tr><th>Trabajador</th><th>Nómina</th><th>Motivo</th><th>Departamento</th><th style={{ textAlign: 'right' }}>Días</th><th style={{ textAlign: 'right' }}>Neto USD</th><th style={{ textAlign: 'center' }}>Acción</th></tr></thead>
           <tbody>
-            {loading && <tr><td colSpan={6} className="muted" style={{ textAlign: 'center' }}>Cargando…</td></tr>}
-            {!loading && !lista.length && <tr><td colSpan={6} className="muted" style={{ textAlign: 'center' }}>Sin personal. Agregá la primera persona arriba.</td></tr>}
-            {!loading && lista.map((p) => (
-              <tr key={p.id} style={{ opacity: p.activo ? 1 : 0.55 }}>
-                <td>{p.nombre} {p.apellido}{p.cedula ? <span className="muted"> · {p.cedula}</span> : null}</td>
-                <td className="muted">{p.departamento || '—'}</td>
-                <td className="muted">{p.cargo || '—'}</td>
-                <td className="mono" style={{ textAlign: 'right' }}>{Number(p.sueldo_base) > 0 ? Number(p.sueldo_base).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}</td>
-                <td style={{ textAlign: 'center' }}>
-                  <span className="badge" style={{ color: p.activo ? 'var(--success)' : 'var(--muted)' }}>{p.activo ? 'Activo' : 'Inactivo'}</span>
-                </td>
-                <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
-                  <button className="btn btn-sm btn-ghost" onClick={() => editar(p)} title="Editar">✎</button>
-                  <button className="btn btn-sm btn-ghost" onClick={() => toggleActivo(p)} title={p.activo ? 'Desactivar' : 'Activar'}>{p.activo ? '⏸' : '▶'}</button>
-                  <button className="btn btn-sm btn-ghost" onClick={() => borrar(p)} title="Eliminar" style={{ color: 'var(--danger)' }}>🗑</button>
-                </td>
+            {loading && <tr><td colSpan={7} className="muted" style={{ textAlign: 'center' }}>Cargando…</td></tr>}
+            {!loading && !rows.length && <tr><td colSpan={7}><EmptyState message="No hay nómina pendiente por pagar" icon="✅" /></td></tr>}
+            {!loading && rows.map((r) => (
+              <tr key={r.id}>
+                <td>{r.nombre}</td>
+                <td className="mono muted">{r.periodo?.codigo ?? '—'}</td>
+                <td><span className="badge" style={{ background: r.periodo?.tipo === 'vacaciones' ? 'var(--danger, #e5484d)' : r.periodo?.tipo === 'liquidacion' ? 'var(--warning, #ffae00)' : 'var(--primary-2, #2b6cb0)', color: '#fff' }}>{labelMotivoNomina(r.periodo?.tipo)}</span></td>
+                <td className="muted">{r.departamento || '—'}</td>
+                <td className="mono" style={{ textAlign: 'right' }}>{r.dias_trabajados}</td>
+                <td className="mono" style={{ textAlign: 'right', fontWeight: 700 }}>{monto(r.neto_usd, 'USD')}</td>
+                <td style={{ textAlign: 'center' }}><button className="btn btn-sm btn-primary" onClick={() => setPagar(r)}>💸 Pagar</button></td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {pagar && (
+        <PagarRenglonModal renglon={pagar} cajas={cajas} actor={actor} actorName={actorName}
+          onClose={() => setPagar(null)}
+          onPaid={async () => { setPagar(null); await recargar(); onPaid(); }} />
+      )}
+    </Modal>
+  );
+}
+
+/* ───────── Pagar un renglón de nómina (mismo motor que el pago de OC) ───────── */
+function PagarRenglonModal({ renglon, cajas, actor, actorName, onClose, onPaid }: {
+  renglon: NominaRenglon; cajas: Caja[]; actor: string; actorName: string | null; onClose: () => void; onPaid: () => void;
+}) {
+  const neto = round2(Number(renglon.neto_usd) || 0);
+  const [cajaId, setCajaId] = useState(cajas[0]?.id ?? '');
+  const caja = cajas.find((c) => c.id === cajaId) ?? null;
+  // Saldos reales de la caja (caja multimoneda: cada cuenta/moneda con su saldo).
+  const [saldosCaja, setSaldosCaja] = useState<CajaSaldo[]>([]);
+  const [saldoSelId, setSaldoSelId] = useState('');
+  const [tasa, setTasa] = useState(0);
+  const [tasaFecha, setTasaFecha] = useState<string | null>(null);
+  const [montoStr, setMontoStr] = useState(String(neto));
+  const [factura, setFactura] = useState<File | null>(null);
+  const [seriales, setSeriales] = useState<string[]>([]);
+  const [serialInput, setSerialInput] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getTasaHoy().then((t) => { if (t.usd != null) setTasa(t.usd); setTasaFecha(t.fecha); }).catch(() => {});
+  }, []);
+
+  // Carga los saldos de la caja elegida. Prefiere USD como saldo por defecto.
+  useEffect(() => {
+    if (!cajaId) { setSaldosCaja([]); setSaldoSelId(''); return; }
+    saldosDeCaja(cajaId).then((rows) => {
+      const conSaldo = rows.filter((r) => Number(r.saldo) > 0);
+      setSaldosCaja(conSaldo);
+      const pref = conSaldo.find((r) => r.moneda === 'USD') ?? conSaldo[0];
+      setSaldoSelId(pref?.id ?? '');
+    }).catch(() => { setSaldosCaja([]); setSaldoSelId(''); });
+  }, [cajaId]);
+
+  // Si la caja maneja saldos multimoneda, se paga desde el saldo elegido;
+  // si no (caja legada), desde el saldo simple de la caja.
+  const esMulti = saldosCaja.length > 0;
+  const selSaldo = saldosCaja.find((s) => s.id === saldoSelId) ?? null;
+  const moneda = esMulti ? (selSaldo?.moneda ?? 'USD') : (caja?.moneda ?? 'USD');
+  const cuentaPago = esMulti ? (selSaldo?.cuenta ?? 'general') : null;
+  const disponible = esMulti ? (Number(selSaldo?.saldo) || 0) : (Number(caja?.saldo) || 0);
+
+  // Autocompleta el monto según la moneda elegida (USD/USDT directo, Bs a tasa BCV).
+  useEffect(() => {
+    if (moneda === 'Bs') setMontoStr(tasa > 0 ? String(aBs(neto, tasa)) : '');
+    else setMontoStr(String(neto));
+  }, [moneda, tasa, neto]);
+
+  const pagaUsdEfectivo = moneda === 'USD';
+  function agregarSerial() {
+    const v = serialInput.trim();
+    if (!v) return;
+    if (!seriales.includes(v)) setSeriales((xs) => [...xs, v]);
+    setSerialInput('');
+  }
+  function quitarSerial(s: string) { setSeriales((xs) => xs.filter((x) => x !== s)); }
+
+  const deducTotal = round2((Number(renglon.deduc_anticipos) || 0) + (Number(renglon.deduc_prestamos) || 0));
+
+  async function submit(e: FormEvent) {
+    e.preventDefault(); setError(null);
+    if (!cajaId) { setError('Elegí la caja con la que se paga.'); return; }
+    if (esMulti && !selSaldo) { setError('Elegí de qué saldo (moneda) de la caja se paga.'); return; }
+    const m = round2(Number(montoStr) || 0);
+    if (m <= 0) { setError('Indicá el monto a pagar.'); return; }
+    if (m > disponible + 0.01) { setError(`Saldo insuficiente. Disponible: ${monto(disponible, moneda)}.`); return; }
+    setSaving(true);
+    try {
+      await pagarRenglon({
+        renglon, cajaId, monto: m,
+        cuenta: cuentaPago, moneda,
+        tasa: moneda === 'Bs' ? tasa : null,
+        seriales: pagaUsdEfectivo ? seriales : null,
+        comprobante: factura,
+        actorEmail: actor, actorName,
+      });
+      notify(`Nómina pagada · ${renglon.nombre} · ${monto(m, moneda)}`, 'success', { link: '#/app/tesoreria' });
+      onPaid();
+    } catch (err) { setError(err instanceof Error ? err.message : 'No se pudo pagar.'); setSaving(false); }
+  }
+
+  return (
+    <Modal title={`Pagar nómina · ${renglon.nombre}`} size="lg" onClose={() => !saving && onClose()} footer={
+      <>
+        <button className="btn btn-ghost" onClick={onClose} disabled={saving}>Cancelar</button>
+        <button type="submit" form="pagar-nomina" className="btn btn-primary" disabled={saving}>{saving ? 'Pagando…' : `PAGAR · ${monto(Number(montoStr) || 0, moneda)}`}</button>
+      </>
+    }>
+      <form id="pagar-nomina" onSubmit={submit}>
+        {error && <div className="card" style={{ borderColor: 'var(--danger)', marginBottom: '.75rem' }}><strong>Error:</strong> {error}</div>}
+
+        <div className="card" style={{ marginBottom: '.75rem' }}>
+          <div className="card-title" style={{ marginBottom: '.4rem' }}>Detalle del renglón</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '.3rem .9rem', fontSize: '.84rem' }}>
+            <div><span className="muted">Nómina:</span> <strong className="mono">{renglon.periodo?.codigo ?? '—'}</strong></div>
+            <div><span className="muted">Departamento:</span> {renglon.departamento || '—'}</div>
+            <div><span className="muted">Días:</span> <strong>{renglon.dias_trabajados}</strong></div>
+            <div><span className="muted">Bruto:</span> <strong className="mono">{monto(renglon.salario_bruto, 'USD')}</strong></div>
+            <div><span className="muted">Deducciones:</span> <strong className="mono">{monto(deducTotal, 'USD')}</strong></div>
+            <div><span className="muted">Neto a pagar:</span> <strong className="mono" style={{ color: 'var(--success)' }}>{monto(neto, 'USD')}</strong></div>
+          </div>
+        </div>
+
+        {/* Conversión USD ⇄ Bs (tasa BCV editable). */}
+        <div className="card" style={{ marginBottom: '.75rem', borderColor: 'var(--brand, #ff8a00)' }}>
+          <div className="card-title" style={{ marginBottom: '.5rem' }}>Conversión</div>
+          <div style={{ display: 'flex', gap: '1.2rem', flexWrap: 'wrap', alignItems: 'center' }}>
+            <div><div className="muted" style={{ fontSize: '.72rem' }}>Neto en USD</div><strong className="mono" style={{ fontSize: '1.1rem' }}>{monto(neto, 'USD')}</strong></div>
+            <div className="muted" style={{ fontSize: '1.2rem' }}>⇄</div>
+            <div><div className="muted" style={{ fontSize: '.72rem' }}>Equivale en Bs</div><strong className="mono" style={{ fontSize: '1.1rem' }}>{tasa > 0 ? monto(aBs(neto, tasa), 'Bs') : '—'}</strong></div>
+            <div className="form-row" style={{ marginLeft: 'auto', minWidth: 150 }}>
+              <label style={{ fontSize: '.72rem' }}>Tasa BCV (Bs/$){tasaFecha ? ` · ${fmtDate(tasaFecha)}` : ''}</label>
+              <input className="input mono" type="number" min={0} step="any" value={tasa || ''} onChange={(e) => setTasa(Number(e.target.value) || 0)} placeholder="0,00" />
+            </div>
+          </div>
+        </div>
+
+        <div className="form-grid">
+          <div className="form-row">
+            <label>Caja (de dónde sale el dinero)</label>
+            <select className="select" value={cajaId} onChange={(e) => setCajaId(e.target.value)} required>
+              {!cajas.length && <option value="">— sin cajas —</option>}
+              {cajas.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+            </select>
+          </div>
+          {esMulti && (
+            <div className="form-row">
+              <label>Saldo de la caja (moneda / cuenta)</label>
+              <select className="select" value={saldoSelId} onChange={(e) => setSaldoSelId(e.target.value)} required>
+                {saldosCaja.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.moneda}{s.cuenta !== 'general' ? ` · ${s.cuenta === 'juridica' ? 'Jurídica' : 'Personal'}` : ''} · {monto(Number(s.saldo), s.moneda)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div className="form-row">
+            <label>Monto a pagar ({moneda})</label>
+            <input className="input mono" type="number" min={0} step="any" value={montoStr} onChange={(e) => setMontoStr(dosDecimales(e.target.value))} required />
+            <small className="muted">Disponible: <strong className="mono">{monto(disponible, moneda)}</strong></small>
+            {moneda === 'Bs' && <small className="muted">Se autocompletó con la tasa BCV; podés ajustarlo.</small>}
+            {pagaUsdEfectivo && redondearArriba5(Number(montoStr) || 0) > (Number(montoStr) || 0) && (
+              <small className="muted" style={{ display: 'flex', alignItems: 'center', gap: '.4rem', flexWrap: 'wrap' }}>
+                💵 El monto tiene decimales. En efectivo se sugiere <strong className="mono">{monto(redondearArriba5(Number(montoStr) || 0), 'USD')}</strong> (redondeado al múltiplo de $5).
+                <button type="button" className="btn btn-sm btn-ghost" onClick={() => setMontoStr(String(redondearArriba5(Number(montoStr) || 0)))}>Redondear a {monto(redondearArriba5(Number(montoStr) || 0), 'USD')}</button>
+              </small>
+            )}
+          </div>
+        </div>
+
+        {/* Seriales de billetes (solo al pagar USD físico). */}
+        {pagaUsdEfectivo && (
+          <div className="card" style={{ margin: '.75rem 0', borderColor: 'var(--brand, #ff8a00)' }}>
+            <div className="card-title" style={{ marginBottom: '.4rem' }}>Seriales de los billetes entregados <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span></div>
+            <div style={{ display: 'flex', gap: '.5rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <div className="form-row" style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
+                <label style={{ fontSize: '.72rem' }}>Serial del billete</label>
+                <input className="input mono" value={serialInput} onChange={(e) => setSerialInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); agregarSerial(); } }} placeholder="Ej.: AB 1234567 C" />
+              </div>
+              <button type="button" className="btn btn-ghost" onClick={agregarSerial}>+ Agregar</button>
+            </div>
+            {seriales.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '.4rem', marginTop: '.5rem' }}>
+                {seriales.map((s, i) => (
+                  <span key={s} className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '.35rem', background: 'var(--bg-1)' }}>
+                    <span className="muted">{i + 1}.</span><span className="mono">{s}</span>
+                    <button type="button" className="btn btn-sm btn-ghost" style={{ padding: '0 .25rem', lineHeight: 1 }} title="Quitar" onClick={() => quitarSerial(s)}>✕</button>
+                  </span>
+                ))}
+                <span className="muted" style={{ alignSelf: 'center', fontSize: '.8rem' }}>{seriales.length} billete(s)</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="form-row">
+          <label>Comprobante de pago (PDF o imagen) <span className="muted">(opcional)</span></label>
+          <input className="input" type="file" accept="application/pdf,image/*" onChange={(e) => setFactura(e.target.files?.[0] ?? null)} />
+          {factura && <small className="muted">{factura.name}</small>}
+        </div>
+      </form>
     </Modal>
   );
 }

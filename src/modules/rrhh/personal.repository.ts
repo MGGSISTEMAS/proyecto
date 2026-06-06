@@ -1,8 +1,7 @@
 /* ============================================================
-   MGG · Tesorería · Personal de nómina
+   MGG · RRHH · Personal (ficha)
    "Usuarios" son los del login; "Personal" engloba a TODO el personal
-   a pagar (tengan o no usuario). Se administra y se paga desde
-   Tesorería → Pago a personal.
+   a pagar (tengan o no usuario). El sueldo base es MENSUAL (USD).
    ============================================================ */
 import { supabase } from '@/shared/lib/supabase';
 import type { Personal } from '@/shared/lib/types';
@@ -25,37 +24,39 @@ export interface PersonalInput {
   cargo?: string | null;
   departamento?: string | null;
   sueldo_base?: number;
+  fecha_ingreso?: string | null;
 }
 
-export async function crearPersonal(input: PersonalInput, actorEmail?: string): Promise<Personal> {
-  const nombre = input.nombre.trim();
-  if (!nombre) throw new Error('Indicá el nombre.');
-  const { data, error } = await supabase.from(TABLE).insert({
-    nombre,
+function payload(input: PersonalInput) {
+  return {
+    nombre: input.nombre.trim(),
     apellido: (input.apellido ?? '').trim(),
     cedula: input.cedula?.trim() || null,
     cargo: input.cargo?.trim() || null,
     departamento: input.departamento?.trim() || null,
     sueldo_base: Math.round((Number(input.sueldo_base) || 0) * 100) / 100,
-    created_by: actorEmail ?? null,
-  }).select('*').single();
+    fecha_ingreso: input.fecha_ingreso || null,
+  };
+}
+
+export async function crearPersonal(input: PersonalInput, actorEmail?: string): Promise<Personal> {
+  if (!input.nombre.trim()) throw new Error('Indicá el nombre.');
+  const { data, error } = await supabase.from(TABLE).insert({ ...payload(input), created_by: actorEmail ?? null }).select('*').single();
   if (error) throw error;
   return data as Personal;
 }
 
 export async function actualizarPersonal(id: string, patch: PersonalInput): Promise<Personal> {
-  const nombre = patch.nombre.trim();
-  if (!nombre) throw new Error('Indicá el nombre.');
-  const { data, error } = await supabase.from(TABLE).update({
-    nombre,
-    apellido: (patch.apellido ?? '').trim(),
-    cedula: patch.cedula?.trim() || null,
-    cargo: patch.cargo?.trim() || null,
-    departamento: patch.departamento?.trim() || null,
-    sueldo_base: Math.round((Number(patch.sueldo_base) || 0) * 100) / 100,
-  }).eq('id', id).select('*').single();
+  if (!patch.nombre.trim()) throw new Error('Indicá el nombre.');
+  const { data, error } = await supabase.from(TABLE).update(payload(patch)).eq('id', id).select('*').single();
   if (error) throw error;
   return data as Personal;
+}
+
+/** Solo el sueldo base (para "guardar sueldos" desde la carga de nómina). */
+export async function guardarSueldoBase(id: string, sueldoBase: number): Promise<void> {
+  const { error } = await supabase.from(TABLE).update({ sueldo_base: Math.round((Number(sueldoBase) || 0) * 100) / 100 }).eq('id', id);
+  if (error) throw error;
 }
 
 /** Activa o desactiva (no borra: conserva el histórico de pagos). */

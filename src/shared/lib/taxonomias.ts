@@ -6,6 +6,7 @@ export type Scope =
   | 'inventario.unidad'
   | 'proveedor.categoria'
   | 'usuario.departamento'
+  | 'usuario.cargo'
   | 'tesoreria.moneda';
 
 const cache = new Map<Scope, Promise<string[]>>();

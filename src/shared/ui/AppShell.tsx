@@ -212,6 +212,7 @@ export function AppShell() {
           {can('combustible') && <NavItem to="/app/combustible" icon="⛽" label="Combustible" />}
           {can('tesoreria') && <NavItem to="/app/tesoreria" icon="🏦" label="Tesorería" />}
           {can('retenciones') && <NavItem to="/app/retenciones" icon="🧾" label="Retenciones" />}
+          {can('rrhh') && <NavItem to="/app/rrhh" icon="👥" label="RRHH / Nómina" />}
         </nav>
 
         {showSistema && <div className="sidebar-section">Sistema</div>}
