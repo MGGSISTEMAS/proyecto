@@ -589,7 +589,7 @@ export function InventarioPage() {
                 </button>
               </div>
               {canWrite && (
-                <button className="btn btn-primary btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setModal({ kind: 'almacenCrear' })}>
+                <button className="btn btn-primary" style={{ marginLeft: 'auto', padding: '.7rem 1.3rem', fontSize: '1.02rem', fontWeight: 700 }} onClick={() => setModal({ kind: 'almacenCrear' })}>
                   + Agregar almacén
                 </button>
               )}
