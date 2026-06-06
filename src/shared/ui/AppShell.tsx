@@ -60,6 +60,16 @@ export function AppShell() {
     });
   }
 
+  // En móvil (≤768px) el sidebar es un drawer deslizable; en desktop, colapsa a íconos.
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  function handleMenuBtn() {
+    if (typeof window !== 'undefined' && window.innerWidth <= 768) setDrawerOpen((o) => !o);
+    else toggleSidebar();
+  }
+  const closeDrawer = () => setDrawerOpen(false);
+  // Cierra el drawer al cambiar de ruta (navegar desde el menú en móvil).
+  useEffect(() => { setDrawerOpen(false); }, [location.pathname]);
+
   async function refreshUnread() {
     try {
       setUnread(await unreadCount());
@@ -189,7 +199,8 @@ export function AppShell() {
   }, [role, user?.email]);
 
   return (
-    <div className={`app${collapsed ? ' sidebar-collapsed' : ''}`}>
+    <div className={`app${collapsed ? ' sidebar-collapsed' : ''}${drawerOpen ? ' drawer-open' : ''}`}>
+      <div className="sidebar-overlay" onClick={closeDrawer} aria-hidden="true" />
       <aside className="sidebar">
         <div className="sidebar-brand">
           <NavLink to="/app" className="brand">
@@ -293,7 +304,7 @@ export function AppShell() {
         <div className="crumb" style={{ display: 'flex', alignItems: 'center', gap: '.6rem' }}>
           <button
             type="button"
-            onClick={toggleSidebar}
+            onClick={handleMenuBtn}
             className="btn btn-icon btn-ghost"
             title={collapsed ? 'Mostrar menú' : 'Ocultar menú'}
             aria-label={collapsed ? 'Mostrar menú' : 'Ocultar menú'}
@@ -352,7 +363,7 @@ export function AppShell() {
         </div>
       </header>
 
-      <main style={{ gridArea: 'main', padding: '1.5rem 2rem', overflowY: 'auto' }}>
+      <main className="main">
         <Outlet />
       </main>
 
