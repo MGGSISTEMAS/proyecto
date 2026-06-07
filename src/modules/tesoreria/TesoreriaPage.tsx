@@ -2013,8 +2013,9 @@ function PagarOrdenModal({ row, cajas, actor, actorName, onClose, onPaid }: {
     setLegMontos({});
   }, [cajaId]);
   useEffect(() => { getTasasMercado().then(setMercado).catch(() => setMercado(null)); }, []);
-  // Caja con varias monedas (Multimoneda) → se paga repartiendo por cuenta.
-  const esMultimoneda = saldosCaja.length >= 2;
+  // Si la caja maneja saldos por cuenta/moneda (caja_saldos), se paga eligiendo
+  // de qué cuentas sale el dinero — aunque tenga una sola moneda con saldo.
+  const esMultimoneda = saldosCaja.length >= 1;
   // Si el método de pago es en efectivo (divisas/Bs), no se exige comprobante.
   const comprobanteOpcional = pagoSinComprobante(o.metodo_pago);
 
@@ -2273,9 +2274,9 @@ function PagarOrdenModal({ row, cajas, actor, actorName, onClose, onPaid }: {
             <label>Caja (de dónde sale el dinero)</label>
             <select className="select" value={cajaId} onChange={(e) => setCajaId(e.target.value)} required>
               {!cajas.length && <option value="">— sin cajas —</option>}
-              {cajas.map((c) => <option key={c.id} value={c.id}>{c.nombre} · {monto(c.saldo, c.moneda)}</option>)}
+              {cajas.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
             </select>
-            <small className="muted">Se descuenta de esta caja y queda registrado en el registro de movimientos (pago de compra).</small>
+            <small className="muted">Se descuenta de esta caja y queda registrado en el registro de movimientos (pago de compra).{esMultimoneda ? ' Abajo elegís de qué cuentas (con saldo) sale el dinero.' : ''}</small>
           </div>
           {!esMultimoneda && (
             <div className="form-row">

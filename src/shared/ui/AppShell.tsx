@@ -7,7 +7,7 @@ import { NotificacionesPanel } from '@/modules/notificaciones/NotificacionesPane
 import { GlobalSearch } from '@/shared/ui/GlobalSearch';
 import { TasaChip } from '@/modules/tesoreria/TasaChip';
 import { toast } from '@/shared/ui/Toast';
-import { descargarManualUsuario, type CapturasManual } from '@/shared/lib/manualUsuarioPdf';
+import type { CapturasManual } from '@/shared/lib/manualUsuarioPdf';
 import { descargarRespaldoSql, enviarRespaldoPorCorreo, chequearRespaldoAutomatico, puedeRespaldar, BACKUP_EMAIL } from '@/shared/lib/backup';
 import { Modal } from '@/shared/ui/Modal';
 import { scanStockAndNotify, unreadCount } from '@/modules/notificaciones/notif.repository';
@@ -149,6 +149,8 @@ export function AppShell() {
 
       navigate(rutaOriginal);
       await sleep(150);
+      // Import dinámico: la generación del manual (jsPDF) no debe pesar en el arranque.
+      const { descargarManualUsuario } = await import('@/shared/lib/manualUsuarioPdf');
       await descargarManualUsuario(capturas);
     } catch {
       toast('No se pudo generar el manual de usuario', 'error');
