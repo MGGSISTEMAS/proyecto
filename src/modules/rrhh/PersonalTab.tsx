@@ -29,6 +29,7 @@ export function PersonalTab({ canWrite, actor }: { canWrite: boolean; actor: str
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [histPersona, setHistPersona] = useState<Personal | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
   const [cargos, setCargos] = useState<string[]>([]);
   const [departamentos, setDepartamentos] = useState<string[]>([]);
 
@@ -46,12 +47,13 @@ export function PersonalTab({ canWrite, actor }: { canWrite: boolean; actor: str
   useEffect(() => { cargarCatalogos(); }, [cargarCatalogos]);
   useRealtime(['personal'], () => { void recargar(); });
 
+  function abrirNuevo() { setEditId(null); setForm(VACIO); setError(null); setFormOpen(true); }
   function editar(p: Personal) {
     setEditId(p.id);
     setForm({ nombre: p.nombre, apellido: p.apellido, cedula: p.cedula ?? '', cargo: p.cargo ?? '', departamento: p.departamento ?? '', sueldo_base: Number(p.sueldo_base) || 0, fecha_ingreso: p.fecha_ingreso ?? '' });
-    setError(null);
+    setError(null); setFormOpen(true);
   }
-  function limpiar() { setEditId(null); setForm(VACIO); setError(null); }
+  function cerrarForm() { setEditId(null); setForm(VACIO); setError(null); setFormOpen(false); }
 
   async function guardar(e: FormEvent) {
     e.preventDefault(); setError(null);
@@ -67,7 +69,7 @@ export function PersonalTab({ canWrite, actor }: { canWrite: boolean; actor: str
       if (depto && !departamentos.includes(depto)) await addDepartamento(depto, actor).catch(() => {});
       cargarCatalogos();
       toast(editId ? 'Personal actualizado' : 'Personal agregado', 'success');
-      limpiar();
+      cerrarForm();
       await recargar();
     } catch (err) { setError(err instanceof Error ? err.message : 'No se pudo guardar'); }
     finally { setGuardando(false); }
@@ -86,36 +88,9 @@ export function PersonalTab({ canWrite, actor }: { canWrite: boolean; actor: str
   return (
     <div>
       {canWrite && (
-        <form onSubmit={guardar} style={{ marginBottom: '1rem' }}>
-          {error && <div className="card" style={{ borderColor: 'var(--danger)', marginBottom: '.6rem' }}><strong>Error:</strong> {error}</div>}
-          <div className="card" style={{ padding: '.85rem' }}>
-            <div className="card-title" style={{ marginBottom: '.5rem' }}>{editId ? 'Editar trabajador' : 'Agregar trabajador'}</div>
-            <div className="form-grid">
-              <div className="form-row"><label>Nombre *</label><input className="input" value={form.nombre} onChange={(e) => setForm((f) => ({ ...f, nombre: e.target.value }))} required /></div>
-              <div className="form-row"><label>Apellido</label><input className="input" value={form.apellido ?? ''} onChange={(e) => setForm((f) => ({ ...f, apellido: e.target.value }))} /></div>
-              <div className="form-row"><label>Cédula</label><input className="input" value={form.cedula ?? ''} onChange={(e) => setForm((f) => ({ ...f, cedula: sanitizarCedula(e.target.value) }))} placeholder="V-12345678" maxLength={11} inputMode="numeric" /></div>
-              <div className="form-row">
-                <label>Cargo</label>
-                <input className="input" list="rrhh-cargos" value={form.cargo ?? ''} onChange={(e) => setForm((f) => ({ ...f, cargo: e.target.value }))} placeholder="Elegí o escribí uno nuevo…" />
-                <datalist id="rrhh-cargos">{cargos.map((c) => <option key={c} value={c} />)}</datalist>
-                <small className="muted">Elegí de la lista o escribí uno nuevo (queda guardado).</small>
-              </div>
-              <div className="form-row">
-                <label>Departamento</label>
-                <input className="input" list="rrhh-departamentos" value={form.departamento ?? ''} onChange={(e) => setForm((f) => ({ ...f, departamento: e.target.value }))} placeholder="Elegí o escribí uno nuevo…" />
-                <datalist id="rrhh-departamentos">{departamentos.map((d) => <option key={d} value={d} />)}</datalist>
-                <small className="muted">Toma los de Usuarios; podés agregar uno nuevo.</small>
-              </div>
-              <div className="form-row"><label>Sueldo base mensual (USD)</label><input className="input mono" type="number" min={0} step="any" value={form.sueldo_base ?? 0} onChange={(e) => setForm((f) => ({ ...f, sueldo_base: Number(e.target.value) || 0 }))} placeholder="0,00" /></div>
-              <div className="form-row"><label>Fecha de ingreso</label><input className="input" type="date" value={form.fecha_ingreso ?? ''} onChange={(e) => setForm((f) => ({ ...f, fecha_ingreso: e.target.value }))} /></div>
-            </div>
-            <div style={{ display: 'flex', gap: '.5rem', marginTop: '.5rem' }}>
-              <button type="submit" className="btn btn-primary" disabled={guardando}>{guardando ? 'Guardando…' : editId ? 'Guardar cambios' : '+ Agregar'}</button>
-              {editId && <button type="button" className="btn btn-ghost" onClick={limpiar} disabled={guardando}>Cancelar edición</button>}
-            </div>
-            <small className="muted" style={{ display: 'block', marginTop: '.4rem' }}>El sueldo base es <strong>mensual</strong>; la quincena = 15 días (mitad). Queda guardado para precargar la nómina.</small>
-          </div>
-        </form>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '.75rem' }}>
+          <button className="btn btn-primary" onClick={abrirNuevo}>+ Ingresar Registro de Personal</button>
+        </div>
       )}
 
       <div className="table-wrap">
@@ -123,7 +98,7 @@ export function PersonalTab({ canWrite, actor }: { canWrite: boolean; actor: str
           <thead><tr><th>Persona</th><th>Departamento</th><th>Cargo</th><th style={{ textAlign: 'right' }}>Sueldo base</th><th style={{ textAlign: 'center' }}>Estado</th><th style={{ textAlign: 'center' }}>Acciones</th></tr></thead>
           <tbody>
             {loading && <tr><td colSpan={6} className="muted" style={{ textAlign: 'center' }}>Cargando…</td></tr>}
-            {!loading && !lista.length && <tr><td colSpan={6}><EmptyState message="Sin personal. Agregá el primer trabajador arriba." icon="👥" /></td></tr>}
+            {!loading && !lista.length && <tr><td colSpan={6}><EmptyState message="Sin personal. Usá “+ Ingresar Registro de Personal”." icon="👥" /></td></tr>}
             {!loading && lista.map((p) => (
               <tr key={p.id} style={{ opacity: p.activo ? 1 : 0.55 }}>
                 <td>{p.nombre} {p.apellido}{p.cedula ? <span className="muted"> · {p.cedula}</span> : null}</td>
@@ -145,7 +120,80 @@ export function PersonalTab({ canWrite, actor }: { canWrite: boolean; actor: str
         </table>
       </div>
 
+      {formOpen && (
+        <Modal
+          title={editId ? 'Editar registro de personal' : 'Ingresar registro de personal'}
+          size="lg"
+          onClose={() => { if (!guardando) cerrarForm(); }}
+          footer={
+            <>
+              <button className="btn btn-ghost" onClick={cerrarForm} disabled={guardando}>Cancelar</button>
+              <button type="submit" form="rrhh-personal-form" className="btn btn-primary" disabled={guardando}>
+                {guardando ? 'Guardando…' : editId ? 'Guardar cambios' : '+ Agregar'}
+              </button>
+            </>
+          }
+        >
+          <form id="rrhh-personal-form" onSubmit={guardar}>
+            {error && <div className="card" style={{ borderColor: 'var(--danger)', marginBottom: '.6rem' }}><strong>Error:</strong> {error}</div>}
+            <div className="form-grid">
+              <div className="form-row"><label>Nombre *</label><input className="input" autoFocus value={form.nombre} onChange={(e) => setForm((f) => ({ ...f, nombre: e.target.value }))} required /></div>
+              <div className="form-row"><label>Apellido</label><input className="input" value={form.apellido ?? ''} onChange={(e) => setForm((f) => ({ ...f, apellido: e.target.value }))} /></div>
+              <div className="form-row"><label>Cédula</label><input className="input" value={form.cedula ?? ''} onChange={(e) => setForm((f) => ({ ...f, cedula: sanitizarCedula(e.target.value) }))} placeholder="V-12345678" maxLength={11} inputMode="numeric" /></div>
+              <ComboConAgregar
+                label="Cargo" valor={form.cargo ?? ''} opciones={cargos}
+                onChange={(v) => setForm((f) => ({ ...f, cargo: v }))}
+                hint="Elegí de la lista o agregá uno nuevo (queda guardado)." />
+              <ComboConAgregar
+                label="Departamento" valor={form.departamento ?? ''} opciones={departamentos}
+                onChange={(v) => setForm((f) => ({ ...f, departamento: v }))}
+                hint="Toma los de Usuarios; podés agregar uno nuevo." />
+              <div className="form-row"><label>Sueldo base mensual (USD)</label><input className="input mono" type="number" min={0} step="any" value={form.sueldo_base ?? 0} onChange={(e) => setForm((f) => ({ ...f, sueldo_base: Number(e.target.value) || 0 }))} placeholder="0,00" /></div>
+              <div className="form-row"><label>Fecha de ingreso</label><input className="input" type="date" value={form.fecha_ingreso ?? ''} onChange={(e) => setForm((f) => ({ ...f, fecha_ingreso: e.target.value }))} /></div>
+            </div>
+            <small className="muted" style={{ display: 'block', marginTop: '.5rem' }}>El sueldo base es <strong>mensual</strong>; la quincena = 15 días (mitad). Queda guardado para precargar la nómina.</small>
+          </form>
+        </Modal>
+      )}
+
       {histPersona && <HistoricoPersonaModal persona={histPersona} onClose={() => setHistPersona(null)} />}
+    </div>
+  );
+}
+
+/* ───────── Combo estilizado (select del sistema) con opción de agregar nuevo ───────── */
+function ComboConAgregar({ label, valor, opciones, onChange, hint }: {
+  label: string; valor: string; opciones: string[]; onChange: (v: string) => void; hint?: string;
+}) {
+  const [agregando, setAgregando] = useState(false);
+  const [nuevo, setNuevo] = useState('');
+  // Si el valor actual no está en el catálogo (p. ej. al editar), lo incluimos.
+  const opts = valor && !opciones.includes(valor) ? [valor, ...opciones] : opciones;
+  function confirmar() {
+    const v = nuevo.trim();
+    if (v) onChange(v);
+    setNuevo(''); setAgregando(false);
+  }
+  return (
+    <div className="form-row">
+      <label>{label}</label>
+      {agregando ? (
+        <div style={{ display: 'flex', gap: '.3rem' }}>
+          <input className="input" autoFocus value={nuevo} placeholder={`Nuevo ${label.toLowerCase()}…`}
+            onChange={(e) => setNuevo(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirmar(); } if (e.key === 'Escape') { setAgregando(false); setNuevo(''); } }} />
+          <button type="button" className="btn btn-sm btn-primary" onClick={confirmar} title="Agregar">✓</button>
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => { setAgregando(false); setNuevo(''); }} title="Cancelar">✕</button>
+        </div>
+      ) : (
+        <select className="select" value={valor}
+          onChange={(e) => { if (e.target.value === '__nuevo__') setAgregando(true); else onChange(e.target.value); }}>
+          <option value="">— elegir —</option>
+          {opts.map((o) => <option key={o} value={o}>{o}</option>)}
+          <option value="__nuevo__">+ Agregar nuevo…</option>
+        </select>
+      )}
+      {hint && <small className="muted">{hint}</small>}
     </div>
   );
 }
