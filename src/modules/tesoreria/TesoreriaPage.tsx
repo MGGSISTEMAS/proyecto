@@ -912,13 +912,34 @@ function GastoModal({ cajas, actor, actorName, onClose, onSaved }: {
   const [error, setError] = useState<string | null>(null);
   const caja = cajas.find((c) => c.id === cajaId) ?? null;
 
+  // Saldos reales de la caja (multimoneda: cada cuenta/moneda con su saldo).
+  const [saldosCaja, setSaldosCaja] = useState<CajaSaldo[]>([]);
+  const [saldoSelId, setSaldoSelId] = useState('');
+  useEffect(() => {
+    if (!cajaId) { setSaldosCaja([]); setSaldoSelId(''); return; }
+    saldosDeCaja(cajaId).then((rows) => {
+      const conSaldo = rows.filter((r) => Number(r.saldo) > 0);
+      setSaldosCaja(conSaldo);
+      setSaldoSelId(conSaldo[0]?.id ?? '');
+    }).catch(() => { setSaldosCaja([]); setSaldoSelId(''); });
+  }, [cajaId]);
+
+  const esMulti = saldosCaja.length > 0;
+  const selSaldo = saldosCaja.find((s) => s.id === saldoSelId) ?? null;
+  const monedaPago = esMulti ? (selSaldo?.moneda ?? caja?.moneda ?? 'Bs') : (caja?.moneda ?? 'Bs');
+  const cuentaPago = esMulti ? (selSaldo?.cuenta ?? 'general') : null;
+  const disponible = esMulti ? (Number(selSaldo?.saldo) || 0) : (Number(caja?.saldo) || 0);
+
   async function submit(e: FormEvent) {
     e.preventDefault(); setError(null);
     if (!cajaId) { setError('Elegí la caja.'); return; }
+    if (esMulti && !selSaldo) { setError('Elegí de qué saldo (moneda) se paga.'); return; }
+    const m = Number(montoStr) || 0;
+    if (m > disponible + 0.01) { setError(`Saldo insuficiente. Disponible: ${monto(disponible, monedaPago)}.`); return; }
     setSaving(true);
     try {
-      await registrarGasto({ cajaId, monto: Number(montoStr) || 0, concepto, actor, actorName });
-      notify(`Gasto registrado: ${monto(Number(montoStr) || 0, caja?.moneda ?? 'Bs')}`, 'success', { link: '#/app/tesoreria' });
+      await registrarGasto({ cajaId, monto: m, concepto, cuenta: cuentaPago, moneda: monedaPago, actor, actorName });
+      notify(`Gasto registrado: ${monto(m, monedaPago)}`, 'success', { link: '#/app/tesoreria' });
       onSaved();
     } catch (err) { setError(err instanceof Error ? err.message : 'No se pudo registrar.'); setSaving(false); }
   }
@@ -932,21 +953,34 @@ function GastoModal({ cajas, actor, actorName, onClose, onSaved }: {
         {error && <div className="card" style={{ borderColor: 'var(--danger)', marginBottom: '.75rem' }}><strong>Error:</strong> {error}</div>}
         <div className="form-grid">
           <div className="form-row">
-            <label>Caja (moneda)</label>
+            <label>Caja</label>
             <select className="select" value={cajaId} onChange={(e) => setCajaId(e.target.value)}>
               {!cajas.length && <option value="">— sin cajas —</option>}
-              {cajas.map((c) => <option key={c.id} value={c.id}>{c.nombre} · {monto(c.saldo, c.moneda)}</option>)}
+              {cajas.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
             </select>
           </div>
+          {esMulti && (
+            <div className="form-row">
+              <label>Saldo (moneda / cuenta)</label>
+              <select className="select" value={saldoSelId} onChange={(e) => setSaldoSelId(e.target.value)}>
+                {saldosCaja.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.moneda}{s.cuenta !== 'general' ? ` · ${s.cuenta === 'juridica' ? 'Jurídica' : 'Personal'}` : ''} · {monto(Number(s.saldo), s.moneda)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="form-row">
-            <label>Monto</label>
+            <label>Monto ({monedaPago})</label>
             <input className="input mono" type="number" min={0} step="any" value={montoStr} onChange={(e) => setMontoStr(dosDecimales(e.target.value))} required />
+            <small className="muted">Disponible: <strong className="mono">{monto(disponible, monedaPago)}</strong></small>
           </div>
         </div>
         <div className="form-row">
           <label>Concepto</label>
           <input className="input" value={concepto} onChange={(e) => setConcepto(e.target.value)} placeholder="A qué corresponde el gasto" required />
-          <small className="muted">El gasto queda etiquetado por la moneda de la caja y aparece en el registro de movimientos.</small>
+          <small className="muted">El gasto queda etiquetado por la moneda elegida y aparece en el registro de movimientos.</small>
         </div>
       </form>
     </Modal>
