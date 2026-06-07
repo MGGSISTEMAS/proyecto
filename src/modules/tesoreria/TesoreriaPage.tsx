@@ -2053,6 +2053,14 @@ function PagarOrdenModal({ row, cajas, actor, actorName, onClose, onPaid }: {
     if (monedaLeg === 'COP') return mercado?.copUsd ? round2(n / mercado.copUsd) : 0;
     return round2(n); // moneda desconocida: se asume paridad con el dólar
   }
+  // Inverso de legUsd: cuánto representa, en la moneda de la cuenta, un monto en USD.
+  function montoDesdeUsd(monedaLeg: string, usd: number): number {
+    if (!usd || usd <= 0) return 0;
+    if (monedaLeg === 'USD' || monedaLeg === 'USDT') return round2(usd);
+    if (monedaLeg === 'Bs') return tasa > 0 ? round2(usd * tasa) : 0;
+    if (monedaLeg === 'COP') return mercado?.copUsd ? round2(usd * mercado.copUsd) : 0;
+    return round2(usd);
+  }
   const sumUsdMulti = round2(saldosCaja.reduce((a, s) => a + legUsd(s.moneda, Number(legMontos[s.id]) || 0), 0));
   const cubreTotalMulti = sumUsdMulti >= totalUsd - 0.01;
   // No se puede pagar más que el total de la OC (ni en multipago ni en pago simple).
@@ -2060,6 +2068,30 @@ function PagarOrdenModal({ row, cajas, actor, actorName, onClose, onPaid }: {
   const montoUsdSimple = moneda === 'Bs' ? (tasa > 0 ? round2(montoNum / tasa) : 0) : round2(montoNum);
   const excedeTotalSimple = !esMultimoneda && montoUsdSimple > totalUsd + 0.01;
   const excedeTotal = esMultimoneda ? excedeTotalMulti : excedeTotalSimple;
+
+  // Al elegir una caja multimoneda, prellenar cuánto sale de cada cuenta para
+  // cubrir el total automáticamente (de mayor a menor saldo en USD), así el
+  // usuario ve de una vez lo que debe pagar sin teclear el monto en Bs a mano.
+  // Solo prellena cuando aún no se cargó nada (no pisa lo que el usuario edite).
+  const saldosKey = saldosCaja.map((s) => s.id).join('|');
+  useEffect(() => {
+    if (!saldosCaja.length || totalUsd <= 0) return;
+    // Si hay cuentas en Bs/COP, esperar a tener la tasa para poder convertir.
+    if (saldosCaja.some((s) => s.moneda === 'Bs') && !(tasa > 0)) return;
+    if (saldosCaja.some((s) => s.moneda === 'COP') && !mercado?.copUsd) return;
+    let restante = totalUsd;
+    const next: Record<string, string> = {};
+    const ordenadas = [...saldosCaja].sort((a, b) => legUsd(b.moneda, Number(b.saldo)) - legUsd(a.moneda, Number(a.saldo)));
+    for (const s of ordenadas) {
+      if (restante <= 0.01) break;
+      const dispUsd = legUsd(s.moneda, Number(s.saldo));
+      const usaUsd = Math.min(restante, dispUsd);
+      next[s.id] = dosDecimales(String(montoDesdeUsd(s.moneda, usaUsd)));
+      restante = round2(restante - usaUsd);
+    }
+    setLegMontos(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saldosKey, tasa, mercado, totalUsd]);
 
   // ¿El pago entrega USD físico (efectivo)? Solo entonces se piden los seriales de
   // los billetes. Simple: caja en USD. Multimoneda: pata USD con monto cargado.
