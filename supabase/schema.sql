@@ -144,6 +144,8 @@ create table if not exists public.almacenes (
   id          uuid primary key default gen_random_uuid(),
   nombre      text not null unique,
   ubicacion   text,
+  -- Sede física a la que pertenece (Matanzas, Los Pinos…). Agrupa la vista.
+  sede        text,
   -- Subalmacén: un almacén dentro de otro. null = almacén principal.
   parent_id   uuid references public.almacenes(id) on delete set null,
   estado      estado_generico not null default 'activo',

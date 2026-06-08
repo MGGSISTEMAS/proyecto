@@ -40,6 +40,8 @@ export interface Almacen {
   id: string;
   nombre: string;
   ubicacion?: string | null;
+  /** Sede física (Matanzas, Los Pinos…) que agrupa la vista de almacenes. */
+  sede?: string | null;
   /** Subalmacén: id del almacén padre. null/ausente = almacén principal. */
   parent_id?: string | null;
   estado: EstadoGenerico;

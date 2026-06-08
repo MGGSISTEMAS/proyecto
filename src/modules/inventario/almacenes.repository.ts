@@ -12,8 +12,18 @@ const TABLE = 'almacenes';
 export interface AlmacenInput {
   nombre: string;
   ubicacion?: string | null;
+  /** Sede física que agrupa la vista (Matanzas, Los Pinos…). */
+  sede?: string | null;
   /** Almacén padre (subalmacén). null = almacén principal. */
   parent_id?: string | null;
+}
+
+/** Sedes existentes (para poblar el selector del formulario). */
+export async function listSedes(): Promise<string[]> {
+  const { data } = await supabase.from(TABLE).select('sede');
+  const set = new Set<string>();
+  (data ?? []).forEach((r) => { const s = (r as { sede?: string | null }).sede?.trim(); if (s) set.add(s); });
+  return Array.from(set).sort((a, b) => a.localeCompare(b, 'es'));
 }
 
 export interface AlmacenValor {
@@ -79,14 +89,18 @@ export async function crearAlmacen(input: AlmacenInput, actorEmail?: string): Pr
   let nombre = input.nombre.trim();
   if (!nombre) throw new Error('El nombre del almacén es obligatorio');
   const parentId = input.parent_id ?? null;
+  // El subalmacén hereda la sede de su padre; el principal usa la indicada.
+  let sede = input.sede?.trim() || null;
   if (parentId) {
-    // Subalmacén: se permite repetir nombre; se hace único con la sede por dentro.
-    const { data: padre } = await supabase.from(TABLE).select('nombre').eq('id', parentId).single();
-    nombre = await nombreUnicoSubalmacen(nombre, (padre as { nombre?: string } | null)?.nombre ?? 'sede');
+    const { data: padre } = await supabase.from(TABLE).select('nombre, sede').eq('id', parentId).single();
+    const p = padre as { nombre?: string; sede?: string | null } | null;
+    nombre = await nombreUnicoSubalmacen(nombre, p?.nombre ?? 'sede');
+    sede = p?.sede ?? sede;
   }
   const payload = {
     nombre,
     ubicacion: input.ubicacion?.trim() || null,
+    sede,
     parent_id: parentId,
     created_by: actorEmail ?? null,
   };
@@ -106,6 +120,7 @@ export async function actualizarAlmacen(id: string, patch: Partial<AlmacenInput>
     payload.nombre = nombre;
   }
   if (patch.ubicacion !== undefined) payload.ubicacion = patch.ubicacion?.trim() || null;
+  if (patch.sede !== undefined) payload.sede = patch.sede?.trim() || null;
   if (patch.parent_id !== undefined) payload.parent_id = patch.parent_id ?? null;
   const { data, error } = await supabase.from(TABLE).update(payload).eq('id', id).select('*').single();
   if (error) {

@@ -1,7 +1,7 @@
-import { useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Modal } from '@/shared/ui/Modal';
 import type { Almacen } from '@/shared/lib/types';
-import type { AlmacenInput } from './almacenes.repository';
+import { listSedes, type AlmacenInput } from './almacenes.repository';
 
 interface AlmacenFormProps {
   almacen?: Almacen | null; // null/undefined => crear
@@ -9,6 +9,8 @@ interface AlmacenFormProps {
   almacenes?: Almacen[];
   /** Padre preseleccionado al crear un subalmacén desde un almacén. */
   parentPreset?: string | null;
+  /** Sede preseleccionada al crear un almacén dentro de una sede. */
+  sedePreset?: string | null;
   onClose: () => void;
   onSubmit: (data: AlmacenInput) => Promise<void>;
 }
@@ -26,13 +28,18 @@ function idsDescendientes(rootId: string, almacenes: Almacen[]): Set<string> {
   return out;
 }
 
-export function AlmacenForm({ almacen, almacenes = [], parentPreset, onClose, onSubmit }: AlmacenFormProps) {
+export function AlmacenForm({ almacen, almacenes = [], parentPreset, sedePreset, onClose, onSubmit }: AlmacenFormProps) {
   const isEdit = !!almacen;
   const [nombre, setNombre] = useState(almacen?.nombre ?? '');
   const [ubicacion, setUbicacion] = useState(almacen?.ubicacion ?? '');
   const [parentId, setParentId] = useState<string>(almacen?.parent_id ?? parentPreset ?? '');
+  const [sede, setSede] = useState(almacen?.sede ?? sedePreset ?? '');
+  const [nuevaSede, setNuevaSede] = useState(false);
+  const [sedes, setSedes] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => { listSedes().then(setSedes).catch(() => setSedes([])); }, []);
 
   // Padres posibles: cualquier almacén salvo el propio y su descendencia (evita ciclos).
   const opcionesPadre = useMemo(() => {
@@ -41,6 +48,10 @@ export function AlmacenForm({ almacen, almacenes = [], parentPreset, onClose, on
       .filter((a) => !excluidos.has(a.id))
       .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
   }, [almacenes, almacen]);
+
+  // La sede del subalmacén la hereda del padre (no se edita acá).
+  const padreSel = almacenes.find((a) => a.id === parentId) ?? null;
+  const sedeHeredada = padreSel?.sede ?? null;
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -51,7 +62,7 @@ export function AlmacenForm({ almacen, almacenes = [], parentPreset, onClose, on
     }
     setSaving(true);
     try {
-      await onSubmit({ nombre: nombre.trim(), ubicacion: ubicacion.trim() || null, parent_id: parentId || null });
+      await onSubmit({ nombre: nombre.trim(), ubicacion: ubicacion.trim() || null, sede: sede.trim() || null, parent_id: parentId || null });
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo guardar el almacén.');
@@ -90,6 +101,33 @@ export function AlmacenForm({ almacen, almacenes = [], parentPreset, onClose, on
           </select>
           <small className="muted">Si elegís un padre, este será un <strong>subalmacén</strong> (un almacén dentro de otro).</small>
         </div>
+        {parentId ? (
+          <div className="form-row">
+            <label>Sede</label>
+            <div className="muted" style={{ fontSize: '.85rem' }}>
+              Hereda la sede del almacén padre{sedeHeredada ? <>: <strong>{sedeHeredada}</strong></> : ''}.
+            </div>
+          </div>
+        ) : (
+          <div className="form-row">
+            <label>Sede</label>
+            {nuevaSede ? (
+              <div style={{ display: 'flex', gap: '.4rem' }}>
+                <input className="input" value={sede} onChange={(e) => setSede(e.target.value.toUpperCase())}
+                  placeholder="Ej: MATANZAS, LOS PINOS…" autoFocus style={{ flex: 1 }} />
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setNuevaSede(false); setSede(''); }}>Elegir existente</button>
+              </div>
+            ) : (
+              <select className="select" value={sede}
+                onChange={(e) => { if (e.target.value === '__new__') { setNuevaSede(true); setSede(''); } else setSede(e.target.value); }}>
+                <option value="">— Sin sede —</option>
+                {sedes.map((s) => <option key={s} value={s}>{s}</option>)}
+                <option value="__new__">+ Nueva sede…</option>
+              </select>
+            )}
+            <small className="muted">Agrupa el almacén bajo una sede en la vista (Matanzas, Los Pinos…).</small>
+          </div>
+        )}
         <div className="form-row">
           <label>Nombre del almacén</label>
           <input
