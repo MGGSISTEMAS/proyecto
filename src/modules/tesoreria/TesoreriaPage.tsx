@@ -182,8 +182,7 @@ export function TesoreriaPage() {
             <DispCard titulo="Disponible en USD" valor={monto(disp?.usd ?? 0, 'USD')} />
             <DispCard titulo="Disponible en USDT" valor={monto(disp?.usdt ?? 0, 'USDT')} />
             <DispCard titulo="Equivalente en Bs" valor={monto(disp?.usdEnBs ?? 0, 'Bs')} nota={disp?.tasaUsd != null ? `USD + USDT × tasa ${monto(disp.tasaUsd, 'Bs')}` : 'sin tasa del día'} />
-            <DispCard titulo="Disponible en Bs" valor={monto(disp?.bs ?? 0, 'Bs')} />
-            <DispCard titulo="Total general (Bs)" valor={monto(disp?.totalBs ?? 0, 'Bs')} destacado />
+            <DispCard titulo="Total en Bs" valor={monto(disp?.bs ?? 0, 'Bs')} nota="solo lo ingresado en la cuenta Bs" destacado />
           </div>
 
           <div style={{ display: 'flex', gap: '.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
