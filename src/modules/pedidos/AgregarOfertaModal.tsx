@@ -122,6 +122,7 @@ export function AgregarOfertaModal({
           email: emailClean || null,
           direccion: provDireccion.trim().toUpperCase() || null,
           categorias: [],
+          origen: 'nacional',
           estado: 'activo',
         });
         provId = creado.id;

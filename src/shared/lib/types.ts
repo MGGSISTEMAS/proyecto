@@ -367,10 +367,13 @@ export interface Proveedor {
   email?: string | null;
   direccion?: string | null;
   categorias: string[];
+  origen: OrigenProveedor;
   estado: EstadoGenerico;
   created_at: string;
   updated_at?: string | null;
 }
+
+export type OrigenProveedor = 'nacional' | 'internacional';
 
 export type RecetaFundicion = 'RECETA 1' | 'RECETA 2' | 'RECETA 3';
 export const RECETAS_FUNDICION: RecetaFundicion[] = ['RECETA 1', 'RECETA 2', 'RECETA 3'];

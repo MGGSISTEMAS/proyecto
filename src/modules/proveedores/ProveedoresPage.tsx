@@ -35,6 +35,7 @@ const EMPTY_FORM: ProveedorInput = {
   email: '',
   direccion: '',
   categorias: [],
+  origen: 'nacional',
   estado: 'activo',
 };
 
@@ -414,6 +415,7 @@ function ProveedorFormModal({ initial, isEdit, proveedores, onCancel, onSubmit }
       email: initial.email ?? '',
       direccion: initial.direccion ?? '',
       categorias: [...(initial.categorias ?? [])],
+      origen: initial.origen ?? 'nacional',
       estado: initial.estado,
     };
   });
@@ -585,6 +587,33 @@ function ProveedorFormModal({ initial, isEdit, proveedores, onCancel, onSubmit }
         </div>
 
         <div className="form-row">
+          <label>Origen</label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '.4rem' }}>
+            {([
+              { val: 'nacional', txt: '🇻🇪 Nacional' },
+              { val: 'internacional', txt: '🌎 Internacional' },
+            ] as const).map((o) => {
+              const checked = form.origen === o.val;
+              return (
+                <label
+                  key={o.val}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '.3rem',
+                    padding: '.35rem .65rem',
+                    background: checked ? 'var(--brand-soft, rgba(255,138,0,.12))' : 'var(--bg-1)',
+                    border: `1px solid ${checked ? 'var(--brand, #ff8a00)' : 'var(--border)'}`,
+                    borderRadius: 6, cursor: 'pointer',
+                  }}
+                >
+                  <input type="checkbox" checked={checked} onChange={() => update('origen', o.val)} />
+                  <span style={{ fontSize: '.82rem' }}>{o.txt}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="form-row">
           <label>Categorías que ofrece</label>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '.4rem' }}>
             {categorias.map((c) => {
@@ -696,6 +725,7 @@ function ProveedorDetailModal({ proveedor, onClose }: DetailModalProps) {
         <DetailRow label="Teléfono" value={proveedor.telefono || '—'} />
         <DetailRow label="Correo" value={proveedor.email || '—'} />
         <DetailRow label="Dirección" value={proveedor.direccion || '—'} />
+        <DetailRow label="Origen" value={proveedor.origen === 'internacional' ? '🌎 Internacional' : '🇻🇪 Nacional'} />
         <DetailRow
           label="Categorías"
           value={

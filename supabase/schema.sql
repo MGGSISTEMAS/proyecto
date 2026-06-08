@@ -82,6 +82,7 @@ create table if not exists public.proveedores (
   email         text,
   direccion     text,
   categorias    text[] not null default '{}',
+  origen        text not null default 'nacional' check (origen in ('nacional','internacional')),
   estado        estado_generico not null default 'activo',
   created_at    timestamptz not null default now(),
   updated_at    timestamptz
