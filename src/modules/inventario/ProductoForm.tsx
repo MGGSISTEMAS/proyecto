@@ -32,6 +32,8 @@ interface FormState {
   almacen: string;
   estado: 'activo' | 'inactivo';
   restock_pct: string;
+  presentacion: string;
+  unidades_empaque: string;
   esReceta: boolean;
   receta_fundicion: RecetaFundicion | '';
 }
@@ -49,6 +51,8 @@ function initialState(p: Producto | null, cats: string[], unids: string[]): Form
     almacen: p?.almacen ?? 'General',
     estado: p?.estado ?? 'activo',
     restock_pct: p?.restock_pct != null ? String(p.restock_pct) : '',
+    presentacion: p?.presentacion ?? '',
+    unidades_empaque: p?.unidades_empaque != null ? String(p.unidades_empaque) : '',
     esReceta: !!p?.receta_fundicion,
     receta_fundicion: (p?.receta_fundicion ?? '') as RecetaFundicion | '',
   };
@@ -166,6 +170,8 @@ export function ProductoForm({ producto, productos = [], onClose, onSubmit }: Pr
       almacen: form.almacen.trim() || 'General',
       estado: form.estado,
       restock_pct: restockRaw === '' ? null : Math.max(0, Number(restockRaw)),
+      presentacion: form.presentacion.trim() || null,
+      unidades_empaque: form.unidades_empaque.trim() === '' ? null : Math.max(0, Number(form.unidades_empaque)) || null,
       receta_fundicion: form.esReceta && form.receta_fundicion ? (form.receta_fundicion as RecetaFundicion) : null,
       // Marcar receta no se des-marca al editar (lo añade el toggle o el alta desde fundición).
       es_receta: form.esReceta || (producto?.es_receta ?? false),
@@ -439,6 +445,36 @@ export function ProductoForm({ producto, productos = [], onClose, onSubmit }: Pr
             />
             <small className="muted" style={{ fontSize: '.72rem' }}>
               % sobre el stock mínimo. 150% alerta cuando aún tienes 1.5× el mínimo.
+            </small>
+          </div>
+        </div>
+
+        <div className="form-grid">
+          <div className="form-row">
+            <label>Presentación de compra (opcional)</label>
+            <input
+              className="input"
+              value={form.presentacion}
+              onChange={(e) => update('presentacion', e.target.value)}
+              placeholder="Ej: Caja, Bulto, Paca…"
+            />
+            <small className="muted" style={{ fontSize: '.72rem' }}>
+              Cómo se compra (por bulto/caja). El stock siempre se guarda en {form.unidad || 'unidades'}.
+            </small>
+          </div>
+          <div className="form-row">
+            <label>Unidades por bulto (sugerido)</label>
+            <input
+              className="input mono"
+              type="number"
+              min={0}
+              step="any"
+              value={form.unidades_empaque}
+              onChange={(e) => update('unidades_empaque', e.target.value)}
+              placeholder="Ej: 24"
+            />
+            <small className="muted" style={{ fontSize: '.72rem' }}>
+              Valor sugerido para el conversor de bultos al ingresar stock. Se puede ajustar en cada ingreso (el tamaño puede variar).
             </small>
           </div>
         </div>

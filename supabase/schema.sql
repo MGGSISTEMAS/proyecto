@@ -103,6 +103,10 @@ create table if not exists public.productos (
   almacen      text not null default 'General',
   estado       estado_generico not null default 'activo',
   restock_pct  numeric,
+  -- Empaque sugerido para el conversor de bultos (ej. "Caja" + 24 unidades por
+  -- bulto). Es solo un default editable en cada ingreso; el stock vive en unidades.
+  presentacion      text,
+  unidades_empaque  numeric,
   -- FASE 1: tipo de inventario (inicial / proceso / final)
   tipo         text check (tipo in ('inicial', 'proceso', 'final')),
   created_at   timestamptz not null default now(),
@@ -326,7 +330,7 @@ create policy "transf write auth" on public.transferencias_inter for all using (
 do $$
 declare t text;
 begin
-  foreach t in array array['movimientos_caja','caja_saldos','cajas','transferencias_inter','ordenes','productos','movimientos','combustible_solicitudes','compras_directas','personal','anticipos_prestamos','nomina_periodos','nomina_renglones','rrhh_eventos','almacenes']
+  foreach t in array array['movimientos_caja','caja_saldos','cajas','transferencias_inter','ordenes','productos','movimientos','combustibles','combustible_solicitudes','compras_directas','personal','anticipos_prestamos','nomina_periodos','nomina_renglones','rrhh_eventos','almacenes']
   loop
     if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename=t) then
       execute format('alter publication supabase_realtime add table public.%I', t);

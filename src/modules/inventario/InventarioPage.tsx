@@ -654,17 +654,6 @@ export function InventarioPage() {
                 onAgregarSub={(a) => setModal({ kind: 'almacenCrear', parentId: a.id })}
               />
             )}
-            {consumoAlmacen && (
-              <ConsumoChartModal
-                title={`Consumo · ${consumoAlmacen}`}
-                subtitle="Consumo de productos de este almacén (salidas y consumo de fundición). La gráfica muestra cada producto; el valor en $ usa el costo del movimiento."
-                cargar={async (desde, hasta) => {
-                  const items = await consumoPorProductoEnAlmacen(consumoAlmacen!, desde, hasta);
-                  return items.map((x) => ({ id: x.producto_id, label: x.nombre, sub: x.sku, unidad: x.unidad, cantidad: x.cantidad, valor: x.valor }));
-                }}
-                onClose={() => setConsumoAlmacen(null)}
-              />
-            )}
           </>
           );
         })()
@@ -729,6 +718,18 @@ export function InventarioPage() {
           danger={modal.producto.estado === 'activo'}
           onCancel={() => setModal({ kind: 'none' })}
           onConfirm={() => handleToggleEstado(modal.producto)}
+        />
+      )}
+      {/* Consumo por producto de un almacén — disponible desde la tarjeta y desde el detalle. */}
+      {consumoAlmacen && (
+        <ConsumoChartModal
+          title={`Consumo · ${consumoAlmacen}`}
+          subtitle="Consumo de productos de este almacén (salidas y consumo de fundición). La gráfica muestra cada producto; el valor en $ usa el costo del movimiento."
+          cargar={async (desde, hasta) => {
+            const items = await consumoPorProductoEnAlmacen(consumoAlmacen, desde, hasta);
+            return items.map((x) => ({ id: x.producto_id, label: x.nombre, sub: x.sku, unidad: x.unidad, cantidad: x.cantidad, valor: x.valor }));
+          }}
+          onClose={() => setConsumoAlmacen(null)}
         />
       )}
       {modal.kind === 'export' && (

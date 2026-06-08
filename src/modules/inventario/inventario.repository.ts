@@ -17,6 +17,8 @@ export interface ProductoInput {
   almacen: string;
   estado: EstadoGenerico;
   restock_pct?: number | null;
+  presentacion?: string | null;
+  unidades_empaque?: number | null;
   receta_fundicion?: RecetaFundicion | null;
   precio_venta?: number | null;
   es_receta?: boolean;
