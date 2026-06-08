@@ -54,8 +54,20 @@ export function MovimientoForm({ producto, existencias, almacenesList, fixedAlma
 
   const [costoUnit, setCostoUnit] = useState(String(costoAlmacen || producto.precio || 0));
 
+  // Conversor de bultos (solo para entradas): se ingresa por bulto/caja y el
+  // sistema convierte a unidades. El "unidades por bulto" se ajusta en cada
+  // ingreso (los tamaños varían); su default es el sugerido del producto.
+  const [porBultos, setPorBultos] = useState(false);
+  const [bultos, setBultos] = useState('1');
+  const [uPorBulto, setUPorBulto] = useState(producto.unidades_empaque != null ? String(producto.unidades_empaque) : '');
+  const [costoBulto, setCostoBulto] = useState('');
+
   const opcion = OPCIONES.find((o) => o.value === tipo)!;
-  const cantidadNum = Number(cantidad) || 0;
+  const bultosNum = Number(bultos) || 0;
+  const uPorBultoNum = Number(uPorBulto) || 0;
+  const costoBultoNum = Number(costoBulto) || 0;
+  const usaBultos = tipo === 'entrada' && porBultos;
+  const cantidadNum = usaBultos ? bultosNum * uPorBultoNum : (Number(cantidad) || 0);
   const delta =
     opcion.sign === 'zero'
       ? 0
@@ -71,7 +83,7 @@ export function MovimientoForm({ producto, existencias, almacenesList, fixedAlma
   const isFundicion = tipo === 'fundicion' || tipo === 'fin_fundicion';
   const esEntradaConCosto = tipo === 'entrada';
   const esTransferencia = tipo === 'transferencia';
-  const costoUnitNum = Number(costoUnit) || 0;
+  const costoUnitNum = usaBultos ? (uPorBultoNum > 0 ? costoBultoNum / uPorBultoNum : 0) : (Number(costoUnit) || 0);
   const nuevoPMP =
     esEntradaConCosto && cantidadNum > 0
       ? calcularPMP(stockAlmacen, costoAlmacen, cantidadNum, costoUnitNum)
@@ -88,6 +100,10 @@ export function MovimientoForm({ producto, existencias, almacenesList, fixedAlma
     e.preventDefault();
     setError(null);
 
+    if (usaBultos && (bultosNum <= 0 || uPorBultoNum <= 0)) {
+      setError('Indicá los bultos y las unidades por bulto.');
+      return;
+    }
     if (!isFundicion && cantidadNum <= 0) {
       setError('La cantidad debe ser mayor que 0.');
       return;
@@ -207,6 +223,39 @@ export function MovimientoForm({ producto, existencias, almacenesList, fixedAlma
           </div>
         </div>
 
+        {/* Conversor de bultos: solo al ingresar mercancía (entrada). */}
+        {esEntradaConCosto && (
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '.4rem', marginBottom: '.6rem', cursor: 'pointer' }}>
+            <input type="checkbox" checked={porBultos} onChange={(e) => setPorBultos(e.target.checked)} />
+            <span style={{ fontSize: '.85rem' }}>📦 Ingresar por bultos / cajas (convierte a {producto.unidad})</span>
+          </label>
+        )}
+
+        {usaBultos ? (
+          <>
+            <div className="form-grid">
+              <div className="form-row">
+                <label>Bultos / cajas</label>
+                <input className="input mono" type="number" min={0} step="any" value={bultos} onChange={(e) => setBultos(e.target.value)} required />
+              </div>
+              <div className="form-row">
+                <label>Unidades por bulto</label>
+                <input className="input mono" type="number" min={0} step="any" value={uPorBulto} onChange={(e) => setUPorBulto(e.target.value)}
+                  placeholder={producto.unidades_empaque != null ? String(producto.unidades_empaque) : 'Ej: 24'} required />
+                <small className="muted" style={{ fontSize: '.72rem' }}>Ajustalo en cada ingreso; el tamaño puede variar.</small>
+              </div>
+            </div>
+            <div className="form-row">
+              <label>Costo por bulto (USD)</label>
+              <input className="input mono" type="number" min={0} step="0.01" value={costoBulto} onChange={(e) => setCostoBulto(e.target.value)} placeholder="Precio pagado por cada bulto" />
+              <small className="muted" style={{ fontSize: '.72rem' }}>
+                {bultosNum > 0 && uPorBultoNum > 0
+                  ? <>= <strong>{num(cantidadNum)} {producto.unidad}</strong>{costoBultoNum > 0 ? <> · costo unitario <strong>{money(costoUnitNum)}</strong> ({money(costoBultoNum)} ÷ {num(uPorBultoNum)})</> : ''}</>
+                  : 'Indicá bultos y unidades por bulto para calcular el total.'}
+              </small>
+            </div>
+          </>
+        ) : (
         <div className="form-grid">
           {!isFundicion && (
             <div className="form-row">
@@ -252,6 +301,7 @@ export function MovimientoForm({ producto, existencias, almacenesList, fixedAlma
             </div>
           )}
         </div>
+        )}
 
         {esTransferencia && (
           <div className="form-row">

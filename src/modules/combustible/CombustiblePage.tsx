@@ -73,8 +73,8 @@ export function CombustiblePage() {
     return () => { cancel = true; };
   }, [reload]);
 
-  // Realtime multiusuario: las solicitudes de combustible se reflejan al instante.
-  useRealtime(['combustible_solicitudes'], () => { void reload(); });
+  // Realtime multiusuario: combustibles y sus solicitudes se reflejan al instante.
+  useRealtime(['combustibles', 'combustible_solicitudes'], () => { void reload(); });
 
   const activos = useMemo(() => combustibles.filter((c) => c.estado === 'activo'), [combustibles]);
   const valorTotal = useMemo(() => combustibles.reduce((a, c) => a + (Number(c.litros) || 0) * (Number(c.costo_litro) || 0), 0), [combustibles]);
@@ -97,9 +97,10 @@ export function CombustiblePage() {
           <button className="btn btn-primary" onClick={() => setModal('consumo')} title="Gráfica de consumo de combustible por tipo">📊 Consumo</button>
           {canWrite && (
             <>
-              <button className="btn btn-ghost" onClick={() => setModal('gestionar')}>⛽ Combustibles</button>
-              <button className="btn btn-ghost" onClick={() => setModal('ingreso')} disabled={!activos.length}>⬇ Registrar ingreso</button>
-              <button className="btn btn-primary" style={{ marginLeft: 'auto' }} onClick={() => setModal('solicitud')} disabled={!activos.length}>+ Nueva solicitud de salida</button>
+              {/* Sin combustibles, este es el ÚNICO botón que crea el primero: lo resaltamos. */}
+              <button className={activos.length ? 'btn btn-ghost' : 'btn btn-primary'} onClick={() => setModal('gestionar')}>⛽ Combustibles</button>
+              <button className="btn btn-ghost" onClick={() => setModal('ingreso')} disabled={!activos.length} title={!activos.length ? 'Creá primero un combustible con "⛽ Combustibles"' : undefined}>⬇ Registrar ingreso</button>
+              <button className="btn btn-primary" style={{ marginLeft: 'auto' }} onClick={() => setModal('solicitud')} disabled={!activos.length} title={!activos.length ? 'Creá primero un combustible con "⛽ Combustibles"' : undefined}>+ Nueva solicitud de salida</button>
             </>
           )}
         </div>
@@ -392,19 +393,33 @@ function GestionarModal({ combustibles, almacenes, actor, onClose, onChanged }: 
   const [litros, setLitros] = useState('');
   const [costo, setCosto] = useState('');
   const [busy, setBusy] = useState(false);
+  // Feedback persistente del alta (no solo el toast efímero, que dura 3,2 s y se pierde).
+  const [error, setError] = useState<string | null>(null);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
   const [renombrando, setRenombrando] = useState<{ id: string; actual: string } | null>(null);
   const [nuevoNombre, setNuevoNombre] = useState('');
 
+  // Si el modal abre sin almacén seleccionado (carga tardía), tomamos el primero disponible.
+  useEffect(() => { if (!almacen && almacenes.length) setAlmacen(almacenes[0]); }, [almacenes, almacen]);
+
   async function crear() {
-    if (!nombre.trim()) { toast('Indicá el nombre', 'error'); return; }
-    if (!almacen.trim()) { toast('Elegí el almacén', 'error'); return; }
+    setOkMsg(null);
+    if (!nombre.trim()) { setError('Escribí el nombre del combustible (ej.: Diésel, Gasolina 95).'); return; }
+    if (!almacen.trim()) { setError('Elegí el almacén donde se registra el combustible.'); return; }
+    setError(null);
     setBusy(true);
     try {
       await crearCombustible({ nombre, almacen, litrosIniciales: Number(litros) || 0, costoLitro: Number(costo) || 0, actorEmail: actor });
-      toast(`Combustible "${nombre}" registrado en ${almacen}`, 'success');
+      const msg = `Combustible "${nombre.trim()}" registrado en ${almacen}.`;
+      toast(msg, 'success');
+      setOkMsg(msg);
       setNombre(''); setLitros(''); setCosto('');
       await onChanged();
-    } catch (e) { toast(e instanceof Error ? e.message : 'No se pudo crear', 'error'); }
+    } catch (e) {
+      const m = e instanceof Error ? e.message : 'No se pudo crear el combustible.';
+      setError(m);
+      toast(m, 'error');
+    }
     finally { setBusy(false); }
   }
   function abrirRenombrar(id: string, actual: string) {
@@ -433,8 +448,10 @@ function GestionarModal({ combustibles, almacenes, actor, onClose, onChanged }: 
     <Modal title="Gestionar combustibles" size="lg" onClose={onClose} footer={<button className="btn btn-primary" onClick={onClose}>Cerrar</button>}>
       <div className="card" style={{ marginBottom: '1rem' }}>
         <div className="card-title"><span>Nuevo combustible</span></div>
+        {error && <div className="card" style={{ borderColor: 'var(--danger)', margin: '0 0 .75rem' }}><strong>No se pudo crear:</strong> {error}</div>}
+        {okMsg && <div className="card" style={{ borderColor: 'var(--success, var(--primary))', margin: '0 0 .75rem' }}>✅ {okMsg}</div>}
         <div className="form-grid">
-          <div className="form-row"><label>Nombre</label><input className="input" value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Diésel, Gasolina 95…" /></div>
+          <div className="form-row"><label>Nombre</label><input className="input" value={nombre} onChange={(e) => { setNombre(e.target.value); if (error) setError(null); }} placeholder="Diésel, Gasolina 95…" autoFocus /></div>
           <div className="form-row">
             <label>Almacén</label>
             <select className="select" value={almacen} onChange={(e) => setAlmacen(e.target.value)} required>

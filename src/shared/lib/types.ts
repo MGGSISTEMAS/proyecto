@@ -394,6 +394,10 @@ export interface Producto {
   almacen: string;
   estado: EstadoGenerico;
   restock_pct?: number | null;
+  /** Empaque sugerido para el conversor de bultos (ej. "Caja"). Default editable. */
+  presentacion?: string | null;
+  /** Unidades por bulto sugeridas (ej. 24). Solo un default; el stock va en unidades. */
+  unidades_empaque?: number | null;
   tipo?: TipoInventario | null;
   receta_fundicion?: RecetaFundicion | null;
   precio_promedio?: number | null;
