@@ -1057,20 +1057,22 @@ begin
   end loop;
 end$$;
 
--- Helper: ¿el usuario actual es "staff" de operaciones? (admin o analista).
--- El analista maneja el ciclo de compras: cargar ofertas, emitir OC, recibir
--- mercancía (movimientos + actualización de stock) y evaluar la recepción.
+-- Helper: ¿el usuario actual puede escribir? (cualquier usuario registrado).
+-- El control de acceso POR MÓDULO vive en el front (matriz de permisos
+-- `roles_permisos` + custom_roles): la app oculta lo que el rol no puede usar.
+-- RLS es un gate pragmático: distingue "usuario legítimo" de "anónimo". Antes
+-- enumeraba roles fijos ('admin','analista','obrero') y rompía con cada rol
+-- nuevo (analista_tesoreria, jefa_de_rrhh, jefe_de_administracion, etc.), que
+-- quedaban sin poder escribir nada. is_staff e is_operativo son equivalentes:
+-- cualquier usuario en `usuarios`. is_admin() sigue siendo estricto (solo admin).
 create or replace function public.is_staff()
 returns boolean language sql stable security definer set search_path = public as $$
-  select exists (select 1 from public.usuarios where id = auth.uid() and role in ('admin','analista'));
+  select exists (select 1 from public.usuarios where id = auth.uid());
 $$;
 
--- Helper: ¿el usuario es "operativo"? (admin, analista u obrero). Estos roles
--- trabajan inventario y producción (movimientos, existencias, stock, órdenes de
--- producción y sus materiales).
 create or replace function public.is_operativo()
 returns boolean language sql stable security definer set search_path = public as $$
-  select exists (select 1 from public.usuarios where id = auth.uid() and role in ('admin','analista','obrero'));
+  select exists (select 1 from public.usuarios where id = auth.uid());
 $$;
 
 -- Directorio mínimo de usuarios activos (id, nombre, apellido, cargo) legible por
