@@ -60,6 +60,11 @@ function monto(n: number | null | undefined, moneda: string): string {
   return moneda === 'USD' ? `$ ${v}` : `${moneda} ${v}`;
 }
 
+/** Normaliza texto para buscar: minúsculas y sin acentos (búsqueda tolerante). */
+function normalizarBusqueda(s: string | null | undefined): string {
+  return (s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+}
+
 export function TesoreriaPage() {
   const { user } = useSession();
   const { can, appUser } = usePermissions();
@@ -88,6 +93,7 @@ export function TesoreriaPage() {
   const [fTipo, setFTipo] = useState('');
   const [fDesde, setFDesde] = useState('');
   const [fHasta, setFHasta] = useState('');
+  const [fBuscar, setFBuscar] = useState('');
 
   const [transfers, setTransfers] = useState<TransferenciaInter[]>([]);
 
@@ -123,12 +129,30 @@ export function TesoreriaPage() {
 
   const cerrarYRecargar = async () => { setModal('none'); await reload(); };
 
+  // Búsqueda general (client-side) sobre los movimientos ya cargados: caja,
+  // concepto, beneficiario, motivo, moneda, monto, saldo y fecha. Cada palabra
+  // tecleada debe aparecer en algún campo (búsqueda tipo "todas las palabras").
+  const libroView = useMemo(() => {
+    const q = normalizarBusqueda(fBuscar);
+    if (!q) return libro;
+    const palabras = q.split(/\s+/).filter(Boolean);
+    return libro.filter((m) => {
+      const heno = normalizarBusqueda([
+        m.caja?.nombre, TIPO_MOV_LABEL[m.tipo] ?? m.tipo, CAT_LABEL[m.categoria ?? ''] ?? m.categoria,
+        m.beneficiario, m.motivo, m.destino, m.cuenta, m.moneda,
+        monto(m.monto, m.moneda), monto(m.saldo_despues, m.moneda), dateTime(m.at),
+      ].filter(Boolean).join(' '));
+      return palabras.every((p) => heno.includes(p));
+    });
+  }, [libro, fBuscar]);
+
   // Metadatos del reporte PDF/correo del registro de movimientos (según filtros).
   const reporteMeta = () => ({
     titulo: 'REPORTE DE MOVIMIENTOS',
     subtitulo: [
       fDesde && `Desde ${fDesde}`, fHasta && `Hasta ${fHasta}`,
       fMoneda && `Moneda ${fMoneda}`, fTipo && `Tipo ${fTipo}`,
+      fBuscar.trim() && `Búsqueda "${fBuscar.trim()}"`,
     ].filter(Boolean).join(' · ') || 'Todos los movimientos',
   });
 
@@ -220,6 +244,15 @@ export function TesoreriaPage() {
             <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '.5rem' }}>
               <span>Registro de movimientos</span>
               <div style={{ display: 'flex', gap: '.4rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                <div style={{ position: 'relative' }}>
+                  <input className="input" type="search" value={fBuscar} onChange={(e) => setFBuscar(e.target.value)}
+                    placeholder="🔍 Buscar (caja, concepto, monto…)" style={{ width: 240, paddingRight: fBuscar ? '1.6rem' : undefined }} />
+                  {fBuscar && (
+                    <button type="button" className="btn btn-sm btn-ghost" onClick={() => setFBuscar('')}
+                      title="Limpiar búsqueda"
+                      style={{ position: 'absolute', right: 2, top: '50%', transform: 'translateY(-50%)', padding: '0 .3rem', lineHeight: 1 }}>✕</button>
+                  )}
+                </div>
                 <label className="muted" style={{ display: 'inline-flex', alignItems: 'center', gap: '.3rem', fontSize: '.8rem' }}>
                   Desde <input className="input" type="date" value={fDesde} onChange={(e) => setFDesde(e.target.value)} style={{ width: 'auto' }} />
                 </label>
@@ -238,19 +271,24 @@ export function TesoreriaPage() {
                 </select>
               </div>
             </div>
-            <div style={{ display: 'flex', gap: '.4rem', flexWrap: 'wrap', marginBottom: '.5rem' }}>
-              <button className="btn btn-sm btn-ghost" disabled={!libro.length} onClick={async () => {
-                try { await descargarReportePdf(libro, reporteMeta()); } catch (e) { toast(e instanceof Error ? e.message : 'No se pudo generar el PDF', 'error'); }
+            <div style={{ display: 'flex', gap: '.4rem', flexWrap: 'wrap', marginBottom: '.5rem', alignItems: 'center' }}>
+              <button className="btn btn-sm btn-ghost" disabled={!libroView.length} onClick={async () => {
+                try { await descargarReportePdf(libroView, reporteMeta()); } catch (e) { toast(e instanceof Error ? e.message : 'No se pudo generar el PDF', 'error'); }
               }}>↓ PDF</button>
-              <button className="btn btn-sm btn-ghost" disabled={!libro.length} onClick={() => setCorreoMovOpen(true)}>✉ Enviar por correo</button>
+              <button className="btn btn-sm btn-ghost" disabled={!libroView.length} onClick={() => setCorreoMovOpen(true)}>✉ Enviar por correo</button>
+              {fBuscar.trim() && (
+                <span className="muted" style={{ fontSize: '.8rem' }}>
+                  {libroView.length} de {libro.length} {libro.length === 1 ? 'movimiento' : 'movimientos'}
+                </span>
+              )}
             </div>
             <div className="table-wrap">
               <table className="table" style={{ fontSize: '.85rem' }}>
                 <thead><tr><th>Fecha</th><th>Caja</th><th>Movimiento</th><th>Concepto</th><th style={{ textAlign: 'right' }}>Monto</th><th style={{ textAlign: 'right' }}>Saldo</th><th style={{ textAlign: 'center' }}>Detalle</th></tr></thead>
                 <tbody>
                   {loading && <tr><td colSpan={7} className="muted" style={{ textAlign: 'center' }}>Cargando…</td></tr>}
-                  {!loading && !libro.length && <tr><td colSpan={7}><EmptyState message="Sin movimientos" /></td></tr>}
-                  {!loading && libro.map((m) => {
+                  {!loading && !libroView.length && <tr><td colSpan={7}><EmptyState message={fBuscar.trim() ? `Sin resultados para "${fBuscar.trim()}"` : 'Sin movimientos'} /></td></tr>}
+                  {!loading && libroView.map((m) => {
                     const egreso = m.tipo === 'salida' || m.tipo === 'traslado_salida'
                   || (m.tipo === 'ajuste' && Number(m.saldo_despues) < Number(m.saldo_antes));
                     const concepto = [CAT_LABEL[m.categoria ?? ''] , m.beneficiario, m.motivo].filter(Boolean).join(' · ') || '—';
@@ -276,7 +314,7 @@ export function TesoreriaPage() {
       )}
 
       {movSel && <MovimientoDetalleModal mov={movSel} defaultEmail={actor} onClose={() => setMovSel(null)} />}
-      {correoMovOpen && <EnviarReporteModal movs={libro} meta={reporteMeta()} defaultEmail={actor} onClose={() => setCorreoMovOpen(false)} />}
+      {correoMovOpen && <EnviarReporteModal movs={libroView} meta={reporteMeta()} defaultEmail={actor} onClose={() => setCorreoMovOpen(false)} />}
       {modal === 'gasto' && <GastoModal cajas={cajas} actor={actor} actorName={actorName} onClose={() => setModal('none')} onSaved={cerrarYRecargar} />}
       {modal === 'traslado' && <TrasladoModal cajas={cajas} actor={actor} actorName={actorName} onClose={() => setModal('none')} onSaved={cerrarYRecargar} />}
       {modal === 'pago' && <NominaPorPagarModal cajas={cajas} actor={actor} actorName={actorName} onClose={() => setModal('none')} onPaid={reload} />}
