@@ -144,11 +144,14 @@ create table if not exists public.almacenes (
   id          uuid primary key default gen_random_uuid(),
   nombre      text not null unique,
   ubicacion   text,
+  -- Subalmacén: un almacén dentro de otro. null = almacén principal.
+  parent_id   uuid references public.almacenes(id) on delete set null,
   estado      estado_generico not null default 'activo',
   created_at  timestamptz not null default now(),
   created_by  text,
   updated_at  timestamptz
 );
+create index if not exists idx_almacenes_parent on public.almacenes(parent_id);
 
 -- ─────────────────────────────────────────────────────────────
 -- 5.2 existencias: stock y costo (PMP) por (producto, almacen).
@@ -321,7 +324,7 @@ create policy "transf write auth" on public.transferencias_inter for all using (
 do $$
 declare t text;
 begin
-  foreach t in array array['movimientos_caja','caja_saldos','cajas','transferencias_inter','ordenes','productos','movimientos','combustible_solicitudes','compras_directas','personal','anticipos_prestamos','nomina_periodos','nomina_renglones','rrhh_eventos']
+  foreach t in array array['movimientos_caja','caja_saldos','cajas','transferencias_inter','ordenes','productos','movimientos','combustible_solicitudes','compras_directas','personal','anticipos_prestamos','nomina_periodos','nomina_renglones','rrhh_eventos','almacenes']
   loop
     if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename=t) then
       execute format('alter publication supabase_realtime add table public.%I', t);

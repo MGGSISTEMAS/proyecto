@@ -103,7 +103,7 @@ type ModalState =
   | { kind: 'confirmToggle'; producto: Producto }
   | { kind: 'export' }
   | { kind: 'import'; analisis: AnalisisImport }
-  | { kind: 'almacenCrear' }
+  | { kind: 'almacenCrear'; parentId?: string | null }
   | { kind: 'almacenEditar'; almacen: Almacen }
   | { kind: 'almacenEliminar'; almacen: Almacen };
 
@@ -136,7 +136,7 @@ export function InventarioPage() {
   }, [gestionCatsOpen, productos]);
 
   // Realtime multiusuario: el stock y las recepciones se reflejan al instante.
-  useRealtime(['productos', 'movimientos'], () => { void reload(); });
+  useRealtime(['productos', 'movimientos', 'almacenes'], () => { void reload(); });
 
   async function handleFileImport(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -606,6 +606,7 @@ export function InventarioPage() {
                 onConsumo={setConsumoAlmacen}
                 onEditar={(a) => setModal({ kind: 'almacenEditar', almacen: a })}
                 onEliminar={(a) => setModal({ kind: 'almacenEliminar', almacen: a })}
+                onAgregarSub={(a) => setModal({ kind: 'almacenCrear', parentId: a.id })}
               />
             )}
             {consumoAlmacen && (
@@ -699,6 +700,8 @@ export function InventarioPage() {
       )}
       {modal.kind === 'almacenCrear' && (
         <AlmacenForm
+          almacenes={almacenes}
+          parentPreset={modal.parentId ?? null}
           onClose={() => setModal({ kind: 'none' })}
           onSubmit={handleCrearAlmacen}
         />
@@ -706,6 +709,7 @@ export function InventarioPage() {
       {modal.kind === 'almacenEditar' && (
         <AlmacenForm
           almacen={modal.almacen}
+          almacenes={almacenes}
           onClose={() => setModal({ kind: 'none' })}
           onSubmit={(data) => handleEditarAlmacen(modal.almacen.id, data)}
         />

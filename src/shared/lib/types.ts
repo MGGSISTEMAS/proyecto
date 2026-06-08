@@ -40,6 +40,8 @@ export interface Almacen {
   id: string;
   nombre: string;
   ubicacion?: string | null;
+  /** Subalmacén: id del almacén padre. null/ausente = almacén principal. */
+  parent_id?: string | null;
   estado: EstadoGenerico;
   created_at: string;
   created_by?: string | null;
