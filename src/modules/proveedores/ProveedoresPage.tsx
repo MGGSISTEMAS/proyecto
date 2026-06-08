@@ -399,7 +399,7 @@ const LETRAS_RIF = PREFIJOS_RIF.map((p) => p.letra);
 function partirRif(rif: string): { letra: string; numero: string } {
   const limpio = (rif ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   const letra = LETRAS_RIF.includes(limpio[0]) ? limpio[0] : 'J';
-  const numero = limpio.replace(/^[A-Z]/, '').slice(0, 9);
+  const numero = limpio.replace(/^[A-Z]/, '').slice(0, 10);
   return { letra, numero };
 }
 
@@ -520,7 +520,7 @@ function ProveedorFormModal({ initial, isEdit, proveedores, onCancel, onSubmit }
               <input
                 className="input mono"
                 value={rifPartes.numero}
-                onChange={(e) => update('rif', `${rifPartes.letra}-${e.target.value.replace(/\D/g, '').slice(0, 9)}`)}
+                onChange={(e) => update('rif', `${rifPartes.letra}-${e.target.value.replace(/\D/g, '').slice(0, 10)}`)}
                 placeholder="40778442"
                 inputMode="numeric"
                 style={{ flex: 1 }}
