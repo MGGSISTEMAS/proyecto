@@ -249,7 +249,7 @@ create index if not exists idx_prodmat_prod on public.produccion_materiales(prod
 create table if not exists public.cajas (
   id          uuid primary key default gen_random_uuid(),
   nombre      text not null,
-  moneda      text not null check (moneda in ('USD','Bs')),
+  moneda      text not null check (moneda in ('USD','Bs','USDT','COP')),
   saldo       numeric not null default 0,
   estado      estado_generico not null default 'activo',
   created_at  timestamptz not null default now(),
@@ -330,7 +330,7 @@ create policy "transf write auth" on public.transferencias_inter for all using (
 do $$
 declare t text;
 begin
-  foreach t in array array['movimientos_caja','caja_saldos','cajas','transferencias_inter','ordenes','productos','movimientos','combustibles','combustible_solicitudes','compras_directas','personal','anticipos_prestamos','nomina_periodos','nomina_renglones','rrhh_eventos','almacenes','tesoreria_contrapartes','cuentas_por_pagar','cuentas_por_pagar_abonos']
+  foreach t in array array['movimientos_caja','caja_saldos','cajas','transferencias_inter','ordenes','productos','movimientos','combustibles','combustible_solicitudes','combustible_tanques','compras_directas','personal','anticipos_prestamos','nomina_periodos','nomina_renglones','rrhh_eventos','almacenes','tesoreria_contrapartes','cuentas_por_pagar','cuentas_por_pagar_abonos']
   loop
     if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename=t) then
       execute format('alter publication supabase_realtime add table public.%I', t);
@@ -421,6 +421,23 @@ create table if not exists public.combustible_solicitudes (
   actor              text, actor_name text,
   created_at         timestamptz not null default now()
 );
+
+-- Tanques: depósitos físicos de combustible con capacidad, ubicación y litros propios.
+create table if not exists public.combustible_tanques (
+  id               uuid primary key default gen_random_uuid(),
+  nombre           text not null,
+  combustible_id   uuid references public.combustibles(id) on delete set null,
+  capacidad_litros numeric not null check (capacidad_litros > 0),
+  litros           numeric not null default 0 check (litros >= 0),
+  ubicacion        text,
+  estado           text not null default 'activo' check (estado in ('activo','inactivo')),
+  created_by       text,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz
+);
+alter table public.combustible_tanques enable row level security;
+create policy "tanques read auth"      on public.combustible_tanques for select using (auth.role()='authenticated');
+create policy "tanques write operativo" on public.combustible_tanques for all using (public.is_operativo()) with check (public.is_operativo());
 
 -- Solicitudes de salida/traslado (material y dinero) con flujo de aprobación.
 -- El obrero crea (por_aprobar); admin/analista aprueba y ejecuta (gate en el front).

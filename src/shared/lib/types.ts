@@ -262,6 +262,24 @@ export interface Combustible {
   updated_at?: string | null;
 }
 
+/** Tanque/depósito físico de combustible: capacidad, ubicación y litros propios. */
+export interface Tanque {
+  id: string;
+  nombre: string;
+  /** Combustible que almacena (puede quedar null si se borra el combustible). */
+  combustible_id?: string | null;
+  /** Nombre del combustible, derivado al listar (join). */
+  combustible_nombre?: string | null;
+  capacidad_litros: number;
+  /** Litros actuales en el tanque (suben con ingresos, bajan con salidas). */
+  litros: number;
+  ubicacion?: string | null;
+  estado: EstadoGenerico;
+  created_by?: string | null;
+  created_at: string;
+  updated_at?: string | null;
+}
+
 export type TipoMovCombustible = 'ingreso' | 'salida' | 'ajuste';
 
 export interface MovimientoCombustible {
@@ -450,6 +468,8 @@ export interface ItemOrden {
   cantidad: number;
   precio: number;
   productoId?: string;
+  /** Unidad de medida del producto (KG, L, und…), traída del inventario. */
+  unidad?: string;
   /** Si se compra este ítem. La OP guarda todos; solo los marcados se cotizan/compran. Falta = true. */
   comprar?: boolean;
   /** Finalidad de la compra de este producto en concreto (para qué se pide). */
