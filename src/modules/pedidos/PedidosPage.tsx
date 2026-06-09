@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { EmptyState } from '@/shared/ui/EmptyState';
 import { Modal, ConfirmDialog } from '@/shared/ui/Modal';
 import { StatusBadge } from '@/shared/ui/StatusBadge';
+import { SearchSelect } from '@/shared/ui/SearchSelect';
 import { toast } from '@/shared/ui/Toast';
 import { notify } from '@/shared/lib/notify';
 import { dateTime, money, num, relTime } from '@/shared/lib/format';
@@ -1883,6 +1884,18 @@ function OrdenDetailModal({
           <div className="v">{o.notas}</div>
         </div>
       )}
+      {o.motivo && (
+        <div className="detail-row">
+          <div className="k">Motivo</div>
+          <div className="v">{o.motivo}</div>
+        </div>
+      )}
+      {o.finalidad && (
+        <div className="detail-row">
+          <div className="k">Finalidad</div>
+          <div className="v">{o.finalidad}</div>
+        </div>
+      )}
 
       {mostrarOfertas && (
         <OfertasComparativa
@@ -1898,25 +1911,42 @@ function OrdenDetailModal({
       )}
 
       <h4 style={{ marginTop: '1rem' }}>Ítems</h4>
+      {/* En etapa OP (sin oferta aceptada) no hay precio: se oculta Precio/Subtotal
+          y se marca cuáles se compran. Con oferta aceptada (total>0) se muestra todo. */}
+      {(() => {
+        const conPrecio = Number(o.total) > 0;
+        return (
       <table className="items-table">
         <thead>
           <tr>
             <th>SKU</th>
             <th>Producto</th>
             <th className="num">Cantidad</th>
-            <th className="num">Precio</th>
-            <th className="num">Subtotal</th>
+            {conPrecio ? (
+              <>
+                <th className="num">Precio</th>
+                <th className="num">Subtotal</th>
+              </>
+            ) : (
+              <th className="num">Comprar</th>
+            )}
             <th></th>
           </tr>
         </thead>
         <tbody>
           {o.items.map((it, idx) => (
-            <tr key={`${it.sku}-${idx}`}>
+            <tr key={`${it.sku}-${idx}`} style={{ opacity: !conPrecio && it.comprar === false ? 0.5 : 1 }}>
               <td className="mono">{it.sku}</td>
               <td>{it.nombre}</td>
               <td className="num">{num(it.cantidad)}</td>
-              <td className="num">{money(it.precio)}</td>
-              <td className="num">{money(it.cantidad * it.precio)}</td>
+              {conPrecio ? (
+                <>
+                  <td className="num">{money(it.precio)}</td>
+                  <td className="num">{money(it.cantidad * it.precio)}</td>
+                </>
+              ) : (
+                <td className="num">{it.comprar === false ? '—' : '✓'}</td>
+              )}
               <td>
                 <button
                   className="btn btn-sm btn-ghost"
@@ -1929,14 +1959,18 @@ function OrdenDetailModal({
             </tr>
           ))}
         </tbody>
-        <tfoot>
-          <tr>
-            <td colSpan={4} className="num">TOTAL</td>
-            <td className="num">{money(o.total)}</td>
-            <td></td>
-          </tr>
-        </tfoot>
+        {conPrecio && (
+          <tfoot>
+            <tr>
+              <td colSpan={4} className="num">TOTAL</td>
+              <td className="num">{money(o.total)}</td>
+              <td></td>
+            </tr>
+          </tfoot>
+        )}
       </table>
+        );
+      })()}
 
       <h4 style={{ marginTop: '1.25rem' }}>Historial</h4>
       <Timeline historial={o.historial ?? []} proveedorMap={proveedorMap} personaMap={personaMap} />
@@ -2138,7 +2172,10 @@ function CrearOrdenModal({
   const [items, setItems] = useState<ItemOrden[]>([]);
   // Texto crudo de cada cantidad (permite escribir decimales como 0,5 sin perder el punto).
   const [cantEdit, setCantEdit] = useState<Record<string, string>>({});
-  const [notas, setNotas] = useState('');
+  // El "porqué" de la OP: dos campos distintos (motivo y finalidad).
+  const [motivo, setMotivo] = useState('');
+  const [finalidad, setFinalidad] = useState('');
+  const [motivoTocado, setMotivoTocado] = useState(false);
   const [clasificacion, setClasificacion] = useState<Set<string>>(new Set());
   function toggleClasif(c: string) {
     setClasificacion((prev) => {
@@ -2185,7 +2222,7 @@ function CrearOrdenModal({
       // Agregar de una vez a la solicitud.
       setItems((prev) => prev.some((i) => i.productoId === creado.id)
         ? prev
-        : [...prev, { productoId: creado.id, sku: creado.sku, nombre: creado.nombre, cantidad: 1, precio: 0 }]);
+        : [...prev, { productoId: creado.id, sku: creado.sku, nombre: creado.nombre, cantidad: 1, precio: 0, comprar: true }]);
       toast(`Producto "${creado.nombre}" creado en inventario · completá el resto luego`, 'success');
       setNuevoNombre('');
       setNuevoOpen(false);
@@ -2204,6 +2241,18 @@ function CrearOrdenModal({
     nextCodigo().then(setCodigo).catch(() => setCodigo('OP-?'));
   }, []);
 
+  // Si se piden productos de Víveres y Limpieza, el motivo por defecto es MERCADO
+  // (mientras el usuario no haya escrito su propio motivo).
+  useEffect(() => {
+    if (motivoTocado) return;
+    const hayMercado = items.some((it) => {
+      const p = allProductos.find((x) => x.id === it.productoId);
+      return p && /viver|limpie/i.test(p.categoria ?? '');
+    });
+    setMotivo((m) => (hayMercado ? 'MERCADO' : (m === 'MERCADO' ? '' : m)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, allProductos, motivoTocado]);
+
   function addItem() {
     const p = allProductos.find((x) => x.id === prodSelectId);
     if (!p) return;
@@ -2217,9 +2266,10 @@ function CrearOrdenModal({
         );
       }
       // Precio inicia en 0; el precio real lo fija la oferta del proveedor.
+      // comprar=true por defecto: se puede desmarcar para no comprarlo.
       return [
         ...prev,
-        { productoId: p.id, sku: p.sku, nombre: p.nombre, cantidad: 1, precio: 0 },
+        { productoId: p.id, sku: p.sku, nombre: p.nombre, cantidad: 1, precio: 0, comprar: true },
       ];
     });
   }
@@ -2236,6 +2286,10 @@ function CrearOrdenModal({
       toast('Añade al menos un producto', 'error');
       return;
     }
+    if (!items.some((i) => i.comprar !== false)) {
+      toast('Marcá al menos un artículo a comprar', 'error');
+      return;
+    }
     setSubmitting(true);
     try {
       const email = usuario?.email ?? authEmail;
@@ -2243,7 +2297,8 @@ function CrearOrdenModal({
         // proveedor_id se asigna luego por el admin durante el flujo de sourcing.
         proveedor_id: null,
         items,
-        notas: notas.trim() || null,
+        motivo: motivo.trim() || null,
+        finalidad: finalidad.trim() || null,
         clasificacion: CLASIFICACION_PEDIDO.filter((c) => clasificacion.has(c)),
         solicitante_email: email,
         solicitante: usuario?.nombre ?? null,
@@ -2297,14 +2352,27 @@ function CrearOrdenModal({
 
       <div className="form-row">
         <label>Productos solicitados</label>
-        <div className="line-picker head" style={{ gridTemplateColumns: '2fr 90px 40px' }}>
+        <div className="muted" style={{ fontSize: '.74rem', marginBottom: '.3rem' }}>
+          Marcá los artículos a comprar. Los desmarcados quedan en la solicitud pero no se cotizan.
+        </div>
+        <div className="line-picker head" style={{ gridTemplateColumns: '34px 2fr 90px 40px' }}>
+          <div title="Comprar">✓</div>
           <div>Producto</div>
           <div>Cantidad</div>
           <div></div>
         </div>
         <div>
-          {items.map((it, idx) => (
-            <div className="line-picker" key={`${it.sku}-${idx}`} style={{ gridTemplateColumns: '2fr 90px 40px' }}>
+          {items.map((it, idx) => {
+            const comprar = it.comprar !== false;
+            return (
+            <div className="line-picker" key={`${it.sku}-${idx}`} style={{ gridTemplateColumns: '34px 2fr 90px 40px', opacity: comprar ? 1 : 0.5 }}>
+              <input
+                type="checkbox"
+                checked={comprar}
+                title={comprar ? 'Se comprará' : 'No se comprará'}
+                onChange={(e) => updateItem(idx, { comprar: e.target.checked })}
+                style={{ alignSelf: 'center' }}
+              />
               <div>
                 <div>{it.nombre}</div>
                 <div className="muted mono" style={{ fontSize: '.72rem' }}>{it.sku}</div>
@@ -2337,21 +2405,18 @@ function CrearOrdenModal({
                 ✕
               </button>
             </div>
-          ))}
+            );
+          })}
         </div>
         <div style={{ display: 'flex', gap: '.5rem', alignItems: 'center', marginTop: '.5rem' }}>
-          <select
-            className="select"
+          <SearchSelect
             style={{ flex: 1 }}
             value={prodSelectId}
-            onChange={(e) => setProdSelectId(e.target.value)}
-          >
-            {allProductos.map((p) => (
-              <option value={p.id} key={p.id}>
-                {p.sku} · {p.nombre}
-              </option>
-            ))}
-          </select>
+            onChange={setProdSelectId}
+            options={allProductos.map((p) => ({ value: p.id, label: `${p.sku} · ${p.nombre}` }))}
+            placeholder="Buscar producto por nombre o SKU…"
+            emptyText="Ningún producto coincide"
+          />
           <button type="button" className="btn btn-ghost" onClick={addItem}>+ Añadir</button>
         </div>
 
@@ -2409,12 +2474,22 @@ function CrearOrdenModal({
       </div>
 
       <div className="form-row">
-        <label>Notas / justificación</label>
+        <label>Motivo por el cual</label>
         <textarea
           className="textarea"
-          placeholder="Motivo de la solicitud, frente de trabajo, urgencia…"
-          value={notas}
-          onChange={(e) => setNotas(e.target.value)}
+          placeholder="¿Por qué se solicita? (ej.: reposición de stock, MERCADO, reparación…)"
+          value={motivo}
+          onChange={(e) => { setMotivo(e.target.value); setMotivoTocado(true); }}
+        />
+      </div>
+
+      <div className="form-row">
+        <label>Finalidad</label>
+        <textarea
+          className="textarea"
+          placeholder="¿Para qué se usará? (frente de trabajo, equipo, destino…)"
+          value={finalidad}
+          onChange={(e) => setFinalidad(e.target.value)}
         />
       </div>
 

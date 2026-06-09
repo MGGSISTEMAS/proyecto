@@ -103,6 +103,8 @@ export interface CrearOrdenInput {
   proveedor_id: string | null;
   items: ItemOrden[];
   notas?: string | null;
+  motivo?: string | null;
+  finalidad?: string | null;
   clasificacion?: string[] | null;
   solicitante_email: string;
   solicitante: string | null;
@@ -129,6 +131,8 @@ export async function crearOrden(input: CrearOrdenInput): Promise<Orden> {
     total,
     estado: 'pendiente' as EstadoOrden,
     notas: input.notas ?? null,
+    motivo: input.motivo?.trim() || null,
+    finalidad: input.finalidad?.trim() || null,
     clasificacion: input.clasificacion?.length ? input.clasificacion : null,
     historial,
   };
