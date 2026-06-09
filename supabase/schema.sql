@@ -330,7 +330,7 @@ create policy "transf write auth" on public.transferencias_inter for all using (
 do $$
 declare t text;
 begin
-  foreach t in array array['movimientos_caja','caja_saldos','cajas','transferencias_inter','ordenes','productos','movimientos','combustibles','combustible_solicitudes','compras_directas','personal','anticipos_prestamos','nomina_periodos','nomina_renglones','rrhh_eventos','almacenes']
+  foreach t in array array['movimientos_caja','caja_saldos','cajas','transferencias_inter','ordenes','productos','movimientos','combustibles','combustible_solicitudes','compras_directas','personal','anticipos_prestamos','nomina_periodos','nomina_renglones','rrhh_eventos','almacenes','tesoreria_contrapartes']
   loop
     if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename=t) then
       execute format('alter publication supabase_realtime add table public.%I', t);
@@ -469,6 +469,8 @@ create table if not exists public.ordenes (
   total              numeric not null default 0,
   estado             estado_orden not null default 'pendiente',
   notas              text,
+  motivo             text,           -- "porqué" de la OP: motivo de la solicitud
+  finalidad          text,           -- "porqué" de la OP: para qué se usará
   clasificacion      text[],
   historial          jsonb not null default '[]',
   aprobada_por       text,
@@ -628,6 +630,23 @@ create index if not exists idx_caja_lotes_caja on public.caja_lotes(caja_id, mon
 alter table public.caja_lotes enable row level security;
 create policy "caja_lotes read auth" on public.caja_lotes for select using (auth.role()='authenticated');
 create policy "caja_lotes write operativo" on public.caja_lotes for all using (public.is_operativo()) with check (public.is_operativo());
+
+-- Directorio de contrapartes (clientes / proveedores) para reusar en ingresos
+-- manuales a caja y en cuentas por pagar. El tipo es su categoría.
+create table if not exists public.tesoreria_contrapartes (
+  id         uuid primary key default gen_random_uuid(),
+  tipo       text not null check (tipo in ('cliente','proveedor')),
+  nombre     text not null,
+  rif        text,
+  telefono   text,
+  email      text,
+  nota       text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz
+);
+alter table public.tesoreria_contrapartes enable row level security;
+create policy "contrapartes read auth" on public.tesoreria_contrapartes for select using (auth.role()='authenticated');
+create policy "contrapartes write operativo" on public.tesoreria_contrapartes for all using (public.is_operativo()) with check (public.is_operativo());
 
 -- movimientos_caja: cuenta + tasa aplicada (multipago y trazabilidad).
 alter table public.movimientos_caja add column if not exists cuenta  text;

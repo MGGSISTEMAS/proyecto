@@ -31,6 +31,10 @@ import {
   type Disponibilidad,
 } from './tesoreria.repository';
 import {
+  listContrapartes, crearContraparte, actualizarContraparte, eliminarContraparte,
+  type Contraparte, type TipoContraparte,
+} from './contrapartes.repository';
+import {
   listOrdenesPorPagar, pagarOrdenCompra, pagarOrdenCompraMulti, labelMetodoPago, pagoSinComprobante, type OrdenPorPagar,
   listOrdenesEnCredito, registrarAbonoMulti, listAbonos, type AbonoLeg,
   getOrdenById, urlAdjuntoOc,
@@ -77,7 +81,7 @@ export function TesoreriaPage() {
   const [saldos, setSaldos] = useState<CajaSaldo[]>([]);
   const [libro, setLibro] = useState<MovimientoCaja[]>([]);
   const [loading, setLoading] = useState(true);
-  const [modal, setModal] = useState<'none' | 'gasto' | 'traslado' | 'pago' | 'cajas' | 'tasas' | 'porpagar' | 'creditos' | 'conversor' | 'grafico'>('none');
+  const [modal, setModal] = useState<'none' | 'gasto' | 'traslado' | 'pago' | 'cajas' | 'tasas' | 'porpagar' | 'creditos' | 'conversor' | 'grafico' | 'contrapartes'>('none');
   const [cajaSel, setCajaSel] = useState<Caja | null>(null);
   const [porPagarCount, setPorPagarCount] = useState(0);
   const [creditosCount, setCreditosCount] = useState(0);
@@ -200,6 +204,7 @@ export function TesoreriaPage() {
                 <button className="btn btn-ghost" onClick={() => setModal('gasto')}>− Gasto</button>
                 <button className="btn btn-ghost" onClick={() => setModal('traslado')}>↔ Traspaso de dinero</button>
                 <button className="btn btn-ghost" onClick={() => setModal('cajas')}>🏦 Cajas</button>
+                <button className="btn btn-ghost" onClick={() => setModal('contrapartes')}>👥 Clientes / Proveedores</button>
               </>
             )}
             <button className="btn btn-ghost" onClick={() => setModal('conversor')}>💱 Conversor</button>
@@ -324,6 +329,7 @@ export function TesoreriaPage() {
       {modal === 'grafico' && <GraficoTasasModal onClose={() => setModal('none')} />}
       {modal === 'porpagar' && <OrdenesPorPagarModal cajas={cajas} actor={actor} actorName={actorName} onClose={() => setModal('none')} onPaid={reload} />}
       {modal === 'creditos' && <CuentasCreditoModal cajas={cajas} actor={actor} actorName={actorName} onClose={() => setModal('none')} onChanged={reload} />}
+      {modal === 'contrapartes' && <ContrapartesModal onClose={() => setModal('none')} />}
       {cajaSel && <CajaDetalleModal caja={cajaSel} canWrite={canWrite} actor={actor} actorName={actorName} onClose={() => setCajaSel(null)} onChanged={async () => { await reload(); }} />}
     </div>
   );
@@ -598,6 +604,11 @@ function CajaDetalleModal({ caja, canWrite, actor, actorName, onClose, onChanged
   const [montoStr, setMontoStr] = useState('');
   const [tasaStr, setTasaStr] = useState('');
   const [origen, setOrigen] = useState('');
+  // El origen del ingreso manual identifica de quién entra el dinero: cliente o proveedor.
+  const [origenTipo, setOrigenTipo] = useState<'cliente' | 'proveedor' | ''>('');
+  // Contrapartes guardadas (para reutilizar nombres en el campo origen).
+  const [contrapartes, setContrapartes] = useState<Contraparte[]>([]);
+  useEffect(() => { listContrapartes().then(setContrapartes).catch(() => setContrapartes([])); }, []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mercado, setMercado] = useState<TasasMercado | null>(null);
@@ -651,16 +662,19 @@ function CajaDetalleModal({ caja, canWrite, actor, actorName, onClose, onChanged
     e.preventDefault(); setError(null);
     if ((Number(montoStr) || 0) <= 0) { setError('El monto debe ser mayor que 0.'); return; }
     if (moneda !== 'Bs' && (Number(tasaStr) || 0) <= 0) { setError('Indicá la tasa de compra (Bs por unidad).'); return; }
+    if (!origenTipo) { setError('Indicá si el origen es Cliente o Proveedor.'); return; }
+    if (!origen.trim()) { setError(origenTipo === 'proveedor' ? 'Indicá la razón social del proveedor.' : 'Indicá el nombre del cliente.'); return; }
     setSaving(true);
     try {
+      const origenStr = `${origenTipo === 'proveedor' ? 'Proveedor' : 'Cliente'}: ${origen.trim()}`;
       await ingresarDivisa({
         cajaId: caja.id, cuenta, moneda, monto: Number(montoStr) || 0,
         tasaBs: moneda === 'Bs' ? 1 : Number(tasaStr) || 0,
-        origen: origen.trim() || null, actor, actorName,
+        origen: origenStr, actor, actorName,
       });
       const etiqueta = moneda === 'Bs' ? `Bs · ${cuenta}` : moneda;
-      notify(`Ingreso ${etiqueta} · ${monto(Number(montoStr) || 0, moneda)}`, 'success', { link: '#/app/tesoreria' });
-      setMontoStr(''); setTasaStr(''); setOrigen('');
+      notify(`Ingreso ${etiqueta} · ${monto(Number(montoStr) || 0, moneda)} · ${origenStr}`, 'success', { link: '#/app/tesoreria' });
+      setMontoStr(''); setTasaStr(''); setOrigen(''); setOrigenTipo('');
       await reload(); await onChanged();
     } catch (err) { setError(err instanceof Error ? err.message : 'No se pudo ingresar.'); }
     finally { setSaving(false); }
@@ -862,8 +876,39 @@ function CajaDetalleModal({ caja, canWrite, actor, actorName, onClose, onChanged
               </div>
             )}
             <div className="form-row">
-              <label>Origen (opcional)</label>
-              <input className="input" value={origen} onChange={(e) => setOrigen(e.target.value)} placeholder="Binance, efectivo, transferencia…" />
+              <label>Origen del dinero</label>
+              <div style={{ display: 'flex', gap: '.5rem', marginBottom: '.4rem' }}>
+                {(['cliente', 'proveedor'] as const).map((t) => {
+                  const sel = origenTipo === t;
+                  return (
+                    <label key={t} style={{
+                      display: 'flex', alignItems: 'center', gap: '.4rem', cursor: 'pointer',
+                      padding: '.4rem .7rem', borderRadius: 'var(--r-md)',
+                      border: `1px solid ${sel ? 'var(--primary)' : 'var(--border)'}`,
+                      background: sel ? 'rgba(255,138,0,0.10)' : 'transparent', flex: 1, justifyContent: 'center',
+                    }}>
+                      <input type="radio" name="origen-tipo" checked={sel} onChange={() => { setOrigenTipo(t); setOrigen(''); }} />
+                      <span style={{ fontWeight: 600 }}>{t === 'cliente' ? '👤 Cliente' : '🏭 Proveedor'}</span>
+                    </label>
+                  );
+                })}
+              </div>
+              {origenTipo && (
+                <>
+                  <input
+                    className="input"
+                    list="origen-contrapartes"
+                    value={origen}
+                    onChange={(e) => setOrigen(e.target.value)}
+                    placeholder={origenTipo === 'proveedor' ? 'Razón social del proveedor' : 'Nombre del cliente'}
+                    autoFocus
+                  />
+                  <datalist id="origen-contrapartes">
+                    {contrapartes.filter((c) => c.tipo === origenTipo).map((c) => <option key={c.id} value={c.nombre} />)}
+                  </datalist>
+                  <small className="muted">Elegí uno guardado o escribí uno nuevo. Gestionalos en “👥 Clientes / Proveedores”.</small>
+                </>
+              )}
             </div>
           </div>
           {moneda !== 'Bs' && (Number(montoStr) || 0) > 0 && (Number(tasaStr) || 0) > 0 && (() => {
@@ -935,6 +980,132 @@ function DispCard({ titulo, valor, nota, destacado }: { titulo: string; valor: s
       <strong className="mono" style={{ fontSize: '1.25rem' }}>{valor}</strong>
       {nota && <div className="muted" style={{ fontSize: '.68rem', marginTop: '.2rem' }}>{nota}</div>}
     </div>
+  );
+}
+
+/* ───────────── Directorio de clientes / proveedores ───────────── */
+const VACIA = { tipo: 'proveedor' as TipoContraparte, nombre: '', rif: '', telefono: '', email: '', nota: '' };
+function ContrapartesModal({ onClose }: { onClose: () => void }) {
+  const [lista, setLista] = useState<Contraparte[]>([]);
+  const [filtro, setFiltro] = useState<'todos' | TipoContraparte>('todos');
+  const [form, setForm] = useState({ ...VACIA });
+  const [editId, setEditId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const recargar = useCallback(async () => {
+    try { setLista(await listContrapartes()); }
+    catch (e) { toast(e instanceof Error ? e.message : 'No se pudo cargar', 'error'); }
+  }, []);
+  useEffect(() => { void recargar(); }, [recargar]);
+
+  function nuevo() { setEditId(null); setForm({ ...VACIA }); setError(null); }
+  function editar(c: Contraparte) {
+    setEditId(c.id);
+    setForm({ tipo: c.tipo, nombre: c.nombre, rif: c.rif ?? '', telefono: c.telefono ?? '', email: c.email ?? '', nota: c.nota ?? '' });
+    setError(null);
+  }
+
+  async function guardar() {
+    if (!form.nombre.trim()) { setError(form.tipo === 'proveedor' ? 'Indicá la razón social.' : 'Indicá el nombre del cliente.'); return; }
+    setBusy(true); setError(null);
+    try {
+      if (editId) await actualizarContraparte(editId, form);
+      else await crearContraparte(form);
+      toast(editId ? 'Actualizado' : 'Registrado', 'success');
+      nuevo();
+      await recargar();
+    } catch (e) { setError(e instanceof Error ? e.message : 'No se pudo guardar'); }
+    finally { setBusy(false); }
+  }
+
+  async function borrar(c: Contraparte) {
+    if (!window.confirm(`¿Eliminar a "${c.nombre}"?`)) return;
+    try { await eliminarContraparte(c.id); if (editId === c.id) nuevo(); await recargar(); }
+    catch (e) { toast(e instanceof Error ? e.message : 'No se pudo eliminar', 'error'); }
+  }
+
+  const visibles = lista.filter((c) => filtro === 'todos' || c.tipo === filtro);
+
+  return (
+    <Modal title="Clientes / Proveedores" size="lg" onClose={onClose} footer={<button className="btn btn-primary" onClick={onClose}>Cerrar</button>}>
+      {/* Alta / edición */}
+      <div className="card" style={{ marginBottom: '1rem' }}>
+        <div className="card-title"><span>{editId ? 'Editar' : 'Nuevo'} registro</span></div>
+        {error && <div className="card" style={{ borderColor: 'var(--danger)', margin: '0 0 .6rem' }}><strong>Error:</strong> {error}</div>}
+        <div style={{ display: 'flex', gap: '.5rem', marginBottom: '.5rem' }}>
+          {(['cliente', 'proveedor'] as const).map((t) => {
+            const sel = form.tipo === t;
+            return (
+              <label key={t} style={{
+                display: 'flex', alignItems: 'center', gap: '.4rem', cursor: 'pointer', flex: 1, justifyContent: 'center',
+                padding: '.4rem .7rem', borderRadius: 'var(--r-md)',
+                border: `1px solid ${sel ? 'var(--primary)' : 'var(--border)'}`,
+                background: sel ? 'rgba(255,138,0,0.10)' : 'transparent',
+              }}>
+                <input type="radio" name="cp-tipo" checked={sel} onChange={() => setForm((f) => ({ ...f, tipo: t }))} />
+                <span style={{ fontWeight: 600 }}>{t === 'cliente' ? '👤 Cliente' : '🏭 Proveedor'}</span>
+              </label>
+            );
+          })}
+        </div>
+        <div className="form-grid">
+          <div className="form-row">
+            <label>{form.tipo === 'proveedor' ? 'Razón social' : 'Nombre del cliente'}</label>
+            <input className="input" value={form.nombre} onChange={(e) => setForm((f) => ({ ...f, nombre: e.target.value }))} />
+          </div>
+          <div className="form-row">
+            <label>RIF / C.I. (opcional)</label>
+            <input className="input" value={form.rif} onChange={(e) => setForm((f) => ({ ...f, rif: e.target.value }))} />
+          </div>
+          <div className="form-row">
+            <label>Teléfono (opcional)</label>
+            <input className="input" value={form.telefono} onChange={(e) => setForm((f) => ({ ...f, telefono: e.target.value }))} />
+          </div>
+          <div className="form-row">
+            <label>Correo (opcional)</label>
+            <input className="input" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />
+          </div>
+        </div>
+        <div className="form-row">
+          <label>Nota (opcional)</label>
+          <input className="input" value={form.nota} onChange={(e) => setForm((f) => ({ ...f, nota: e.target.value }))} />
+        </div>
+        <div className="actions" style={{ marginTop: '.5rem' }}>
+          <button className="btn btn-primary btn-sm" onClick={guardar} disabled={busy}>{busy ? 'Guardando…' : (editId ? 'Guardar cambios' : '+ Registrar')}</button>
+          {editId && <button className="btn btn-ghost btn-sm" onClick={nuevo} disabled={busy}>Cancelar edición</button>}
+        </div>
+      </div>
+
+      {/* Listado */}
+      <div className="filterbar" style={{ justifyContent: 'flex-start', gap: '.4rem', marginBottom: '.5rem' }}>
+        {(['todos', 'cliente', 'proveedor'] as const).map((t) => (
+          <button key={t} className={`btn btn-sm ${filtro === t ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setFiltro(t)}>
+            {t === 'todos' ? 'Todos' : t === 'cliente' ? 'Clientes' : 'Proveedores'}
+          </button>
+        ))}
+      </div>
+      <div className="table-wrap">
+        <table className="table">
+          <thead><tr><th>Categoría</th><th>Nombre / Razón social</th><th>RIF / C.I.</th><th>Contacto</th><th></th></tr></thead>
+          <tbody>
+            {!visibles.length && <tr><td colSpan={5} className="muted" style={{ textAlign: 'center' }}>Sin registros.</td></tr>}
+            {visibles.map((c) => (
+              <tr key={c.id}>
+                <td><span className="badge">{c.tipo === 'cliente' ? '👤 Cliente' : '🏭 Proveedor'}</span></td>
+                <td>{c.nombre}</td>
+                <td className="mono">{c.rif || '—'}</td>
+                <td className="muted" style={{ fontSize: '.82rem' }}>{[c.telefono, c.email].filter(Boolean).join(' · ') || '—'}</td>
+                <td className="actions" style={{ whiteSpace: 'nowrap' }}>
+                  <button className="btn btn-sm btn-ghost" onClick={() => editar(c)}>✎</button>
+                  <button className="btn btn-sm btn-ghost" onClick={() => borrar(c)}>🗑</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Modal>
   );
 }
 
