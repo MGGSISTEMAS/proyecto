@@ -22,6 +22,7 @@ import type {
 import {
   aprobarOrden,
   aprobarOcsEnLote,
+  actualizarComprarItems,
   cancelarOrden,
   crearOrden,
   desistirProveedor,
@@ -1608,6 +1609,21 @@ function OrdenDetailModal({
 
   const [enviarOpen, setEnviarOpen] = useState(false);
 
+  // Marca/desmarca un ítem como "a comprar" en la etapa OP (antes de tener precio).
+  // Así una OP con 4 productos puede quedar con solo 2 aprobados para comprar.
+  const [togglingSku, setTogglingSku] = useState<string | null>(null);
+  async function toggleComprar(sku: string, comprar: boolean) {
+    setTogglingSku(sku);
+    try {
+      await actualizarComprarItems(o, { [sku]: comprar }, actorEmail || 'sistema');
+      await onAcceptedOffer(); // refresca la orden en el listado
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'No se pudo actualizar el ítem', 'error');
+    } finally {
+      setTogglingSku(null);
+    }
+  }
+
   async function handleDownloadPdf() {
     try {
       await descargarTrazabilidadPdf(o.id);
@@ -1915,12 +1931,16 @@ function OrdenDetailModal({
           y se marca cuáles se compran. Con oferta aceptada (total>0) se muestra todo. */}
       {(() => {
         const conPrecio = Number(o.total) > 0;
+        // En etapa OP (sin precio) quien gestiona compras puede marcar/desmarcar
+        // qué ítems se aprueban para comprar.
+        const puedeEditarComprar = !conPrecio && canManageProcurement;
         return (
       <table className="items-table">
         <thead>
           <tr>
             <th>SKU</th>
             <th>Producto</th>
+            <th>Finalidad</th>
             <th className="num">Cantidad</th>
             {conPrecio ? (
               <>
@@ -1938,6 +1958,7 @@ function OrdenDetailModal({
             <tr key={`${it.sku}-${idx}`} style={{ opacity: !conPrecio && it.comprar === false ? 0.5 : 1 }}>
               <td className="mono">{it.sku}</td>
               <td>{it.nombre}</td>
+              <td style={{ fontSize: '.84rem' }}>{it.finalidad?.trim() ? it.finalidad : <span className="muted">—</span>}</td>
               <td className="num">{num(it.cantidad)}</td>
               {conPrecio ? (
                 <>
@@ -1945,7 +1966,20 @@ function OrdenDetailModal({
                   <td className="num">{money(it.cantidad * it.precio)}</td>
                 </>
               ) : (
-                <td className="num">{it.comprar === false ? '—' : '✓'}</td>
+                <td className="num">
+                  {puedeEditarComprar ? (
+                    <input
+                      type="checkbox"
+                      checked={it.comprar !== false}
+                      disabled={togglingSku === it.sku}
+                      title={it.comprar === false ? 'Marcar para comprar' : 'Quitar de la compra'}
+                      onChange={(e) => toggleComprar(it.sku, e.target.checked)}
+                      style={{ cursor: 'pointer' }}
+                    />
+                  ) : (
+                    it.comprar === false ? '—' : '✓'
+                  )}
+                </td>
               )}
               <td>
                 <button
@@ -1962,7 +1996,7 @@ function OrdenDetailModal({
         {conPrecio && (
           <tfoot>
             <tr>
-              <td colSpan={4} className="num">TOTAL</td>
+              <td colSpan={5} className="num">TOTAL</td>
               <td className="num">{money(o.total)}</td>
               <td></td>
             </tr>
@@ -2353,7 +2387,7 @@ function CrearOrdenModal({
       <div className="form-row">
         <label>Productos solicitados</label>
         <div className="muted" style={{ fontSize: '.74rem', marginBottom: '.3rem' }}>
-          Marcá los artículos a comprar. Los desmarcados quedan en la solicitud pero no se cotizan.
+          Marcá los artículos a comprar e indicá la finalidad de cada uno. Los desmarcados quedan en la solicitud pero no se cotizan.
         </div>
         <div className="line-picker head" style={{ gridTemplateColumns: '34px 2fr 90px 40px' }}>
           <div title="Comprar">✓</div>
@@ -2365,7 +2399,8 @@ function CrearOrdenModal({
           {items.map((it, idx) => {
             const comprar = it.comprar !== false;
             return (
-            <div className="line-picker" key={`${it.sku}-${idx}`} style={{ gridTemplateColumns: '34px 2fr 90px 40px', opacity: comprar ? 1 : 0.5 }}>
+            <div key={`${it.sku}-${idx}`} style={{ opacity: comprar ? 1 : 0.5, marginBottom: '.4rem' }}>
+            <div className="line-picker" style={{ gridTemplateColumns: '34px 2fr 90px 40px', marginBottom: 0 }}>
               <input
                 type="checkbox"
                 checked={comprar}
@@ -2404,6 +2439,17 @@ function CrearOrdenModal({
               >
                 ✕
               </button>
+            </div>
+            {/* Finalidad de la compra de este producto en concreto (solo si se va a comprar). */}
+            {comprar && (
+              <input
+                className="input"
+                style={{ marginLeft: 34, width: 'calc(100% - 34px)', fontSize: '.82rem' }}
+                placeholder="Finalidad de este producto (¿para qué se compra?)"
+                value={it.finalidad ?? ''}
+                onChange={(e) => updateItem(idx, { finalidad: e.target.value })}
+              />
+            )}
             </div>
             );
           })}
