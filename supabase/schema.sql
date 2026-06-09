@@ -330,7 +330,7 @@ create policy "transf write auth" on public.transferencias_inter for all using (
 do $$
 declare t text;
 begin
-  foreach t in array array['movimientos_caja','caja_saldos','cajas','transferencias_inter','ordenes','productos','movimientos','combustibles','combustible_solicitudes','compras_directas','personal','anticipos_prestamos','nomina_periodos','nomina_renglones','rrhh_eventos','almacenes','tesoreria_contrapartes']
+  foreach t in array array['movimientos_caja','caja_saldos','cajas','transferencias_inter','ordenes','productos','movimientos','combustibles','combustible_solicitudes','compras_directas','personal','anticipos_prestamos','nomina_periodos','nomina_renglones','rrhh_eventos','almacenes','tesoreria_contrapartes','cuentas_por_pagar','cuentas_por_pagar_abonos']
   loop
     if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename=t) then
       execute format('alter publication supabase_realtime add table public.%I', t);
@@ -647,6 +647,46 @@ create table if not exists public.tesoreria_contrapartes (
 alter table public.tesoreria_contrapartes enable row level security;
 create policy "contrapartes read auth" on public.tesoreria_contrapartes for select using (auth.role()='authenticated');
 create policy "contrapartes write operativo" on public.tesoreria_contrapartes for all using (public.is_operativo()) with check (public.is_operativo());
+
+-- Cuentas por pagar manuales: un ingreso manual a caja (cliente/proveedor) genera
+-- una cuenta por pagar por el mismo monto, saldable con abonos (egresos de caja).
+create table if not exists public.cuentas_por_pagar (
+  id          uuid primary key default gen_random_uuid(),
+  tipo        text not null check (tipo in ('cliente','proveedor')),
+  contraparte text not null,
+  monto       numeric not null check (monto > 0),
+  abonado     numeric not null default 0,
+  moneda      text not null,
+  cuenta      text,
+  caja_id     uuid references public.cajas(id) on delete set null,
+  caja_mov_id uuid,
+  estado      text not null default 'abierta' check (estado in ('abierta','saldada')),
+  nota        text,
+  actor       text,
+  actor_name  text,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz
+);
+create table if not exists public.cuentas_por_pagar_abonos (
+  id             uuid primary key default gen_random_uuid(),
+  cuenta_id      uuid not null references public.cuentas_por_pagar(id) on delete cascade,
+  monto          numeric not null check (monto > 0),
+  moneda         text not null,
+  caja_id        uuid references public.cajas(id) on delete set null,
+  cuenta         text,
+  caja_mov_id    uuid,
+  saldo_restante numeric,
+  nota           text,
+  actor          text,
+  actor_name     text,
+  at             timestamptz not null default now()
+);
+alter table public.cuentas_por_pagar enable row level security;
+alter table public.cuentas_por_pagar_abonos enable row level security;
+create policy "cxp read auth" on public.cuentas_por_pagar for select using (auth.role()='authenticated');
+create policy "cxp write operativo" on public.cuentas_por_pagar for all using (public.is_operativo()) with check (public.is_operativo());
+create policy "cxpa read auth" on public.cuentas_por_pagar_abonos for select using (auth.role()='authenticated');
+create policy "cxpa write operativo" on public.cuentas_por_pagar_abonos for all using (public.is_operativo()) with check (public.is_operativo());
 
 -- movimientos_caja: cuenta + tasa aplicada (multipago y trazabilidad).
 alter table public.movimientos_caja add column if not exists cuenta  text;
