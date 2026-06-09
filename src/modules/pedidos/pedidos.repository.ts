@@ -141,6 +141,32 @@ export async function crearOrden(input: CrearOrdenInput): Promise<Orden> {
   return data as Orden;
 }
 
+/**
+ * Marca/desmarca qué ítems se compran en una OP (etapa sin oferta/precio).
+ * Permite que en una OP con 4 productos se aprueben solo algunos: los marcados
+ * (`comprar !== false`) son los que luego se cotizan/compran.
+ */
+export async function actualizarComprarItems(
+  o: Orden,
+  comprarPorSku: Record<string, boolean>,
+  actorEmail: string,
+): Promise<Orden> {
+  if (Number(o.total) > 0) throw new Error('La OP ya tiene oferta con precio: no se pueden cambiar los ítems a comprar.');
+  const items = o.items.map((it) =>
+    Object.prototype.hasOwnProperty.call(comprarPorSku, it.sku)
+      ? { ...it, comprar: comprarPorSku[it.sku] }
+      : it,
+  );
+  const { data, error } = await supabase
+    .from(TABLE)
+    .update({ items, historial: appendHistorial(o, 'items_actualizados', actorEmail) })
+    .eq('id', o.id)
+    .select('*')
+    .single();
+  if (error) throw error;
+  return data as Orden;
+}
+
 function appendHistorial(
   o: Orden,
   evento: string,
