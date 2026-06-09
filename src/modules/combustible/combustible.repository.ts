@@ -10,6 +10,7 @@ import type {
   EventoHistorial,
   MovimientoCombustible,
   SolicitudCombustible,
+  Tanque,
 } from '@/shared/lib/types';
 import { createProducto, listProductos, siguienteSku } from '@/modules/inventario/inventario.repository';
 import { registrarMovimiento } from '@/modules/inventario/movimientos.repository';
@@ -260,6 +261,82 @@ export async function consumoCombustiblePeriodo(desde: Date, hasta: Date): Promi
     cantidad: Math.round(x.cantidad * 100) / 100,
     valor: Math.round(x.valor * 100) / 100,
   }));
+}
+
+/* ───────────── Tanques (depósitos físicos de combustible) ───────────── */
+
+export async function listTanques(): Promise<Tanque[]> {
+  const { data, error } = await supabase
+    .from('combustible_tanques')
+    .select('*, combustible:combustible_id(nombre)')
+    .order('nombre', { ascending: true });
+  if (error) throw error;
+  return (data ?? []).map((row: Record<string, unknown>) => {
+    const { combustible, ...rest } = row as { combustible?: { nombre?: string | null } | null } & Record<string, unknown>;
+    return { ...(rest as unknown as Tanque), combustible_nombre: combustible?.nombre ?? null };
+  });
+}
+
+export async function crearTanque(input: {
+  nombre: string;
+  combustibleId?: string | null;
+  capacidadLitros: number;
+  litrosIniciales?: number;
+  ubicacion?: string | null;
+  actorEmail?: string | null;
+}): Promise<Tanque> {
+  const nombre = input.nombre.trim();
+  if (!nombre) throw new Error('El nombre del tanque es obligatorio.');
+  const capacidad = Number(input.capacidadLitros) || 0;
+  if (capacidad <= 0) throw new Error('La capacidad debe ser mayor que 0.');
+  const litros = Math.max(0, Number(input.litrosIniciales) || 0);
+  if (litros > capacidad) throw new Error('Los litros actuales no pueden superar la capacidad del tanque.');
+
+  const { data, error } = await supabase
+    .from('combustible_tanques')
+    .insert({
+      nombre,
+      combustible_id: input.combustibleId || null,
+      capacidad_litros: capacidad,
+      litros,
+      ubicacion: input.ubicacion?.trim() || null,
+      created_by: input.actorEmail ?? null,
+    })
+    .select('*')
+    .single();
+  if (error) throw error;
+  return data as Tanque;
+}
+
+export async function actualizarTanque(id: string, input: {
+  nombre?: string;
+  combustibleId?: string | null;
+  capacidadLitros?: number;
+  litros?: number;
+  ubicacion?: string | null;
+}): Promise<void> {
+  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (input.nombre !== undefined) {
+    const n = input.nombre.trim();
+    if (!n) throw new Error('El nombre no puede estar vacío.');
+    patch.nombre = n;
+  }
+  if (input.combustibleId !== undefined) patch.combustible_id = input.combustibleId || null;
+  if (input.capacidadLitros !== undefined) patch.capacidad_litros = Number(input.capacidadLitros) || 0;
+  if (input.litros !== undefined) patch.litros = Math.max(0, Number(input.litros) || 0);
+  if (input.ubicacion !== undefined) patch.ubicacion = input.ubicacion?.trim() || null;
+  const { error } = await supabase.from('combustible_tanques').update(patch).eq('id', id);
+  if (error) throw error;
+}
+
+export async function setEstadoTanque(id: string, estado: 'activo' | 'inactivo'): Promise<void> {
+  const { error } = await supabase.from('combustible_tanques').update({ estado, updated_at: new Date().toISOString() }).eq('id', id);
+  if (error) throw error;
+}
+
+export async function eliminarTanque(id: string): Promise<void> {
+  const { error } = await supabase.from('combustible_tanques').delete().eq('id', id);
+  if (error) throw error;
 }
 
 /* ───────────── Solicitudes de salida ───────────── */

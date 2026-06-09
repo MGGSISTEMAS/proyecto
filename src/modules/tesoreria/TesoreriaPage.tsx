@@ -616,17 +616,21 @@ function CajaDetalleModal({ caja, canWrite, actor, actorName, onClose, onChanged
   const [nuevaMonedaOpen, setNuevaMonedaOpen] = useState(false);
   const [nuevaMoneda, setNuevaMoneda] = useState('');
 
-  // Form de ingreso
-  const [moneda, setMoneda] = useState<string>('Bs');
-  const [cuenta, setCuenta] = useState<CuentaCaja>('juridica');
+  // Form de ingreso. Arranca en la moneda propia de la caja (USDT→USDT con tasa
+  // Binance, Bs→Bs), pero se puede ingresar cualquier moneda (igual que Multimoneda).
+  const [moneda, setMoneda] = useState<string>(caja.moneda || 'Bs');
+  const [cuenta, setCuenta] = useState<CuentaCaja>(caja.moneda === 'Bs' ? 'juridica' : 'general');
   const [montoStr, setMontoStr] = useState('');
   const [tasaStr, setTasaStr] = useState('');
   const [origen, setOrigen] = useState('');
   // El origen del ingreso manual identifica de quién entra el dinero: cliente o proveedor.
   const [origenTipo, setOrigenTipo] = useState<'cliente' | 'proveedor' | ''>('');
-  // Contrapartes guardadas (para reutilizar nombres en el campo origen).
+  // Contrapartes guardadas (para buscar/reutilizar nombres en el campo origen).
   const [contrapartes, setContrapartes] = useState<Contraparte[]>([]);
-  useEffect(() => { listContrapartes().then(setContrapartes).catch(() => setContrapartes([])); }, []);
+  const reloadContrapartes = useCallback(() => {
+    listContrapartes().then(setContrapartes).catch(() => setContrapartes([]));
+  }, []);
+  useEffect(() => { reloadContrapartes(); }, [reloadContrapartes]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mercado, setMercado] = useState<TasasMercado | null>(null);
@@ -697,6 +701,15 @@ function CajaDetalleModal({ caja, canWrite, actor, actorName, onClose, onChanged
         tipo: origenTipo, contraparte: origen.trim(), monto: montoNum, moneda, cuenta,
         cajaId: caja.id, nota: `Ingreso ${moneda} en ${caja.nombre}`, actor, actorName,
       });
+      // Si el cliente/proveedor es nuevo, se guarda en el directorio para próximos
+      // pagos (queda disponible en la búsqueda y en "Clientes / Proveedores").
+      const yaGuardado = contrapartes.some(
+        (c) => c.tipo === origenTipo && c.nombre.trim().toUpperCase() === origen.trim().toUpperCase(),
+      );
+      if (!yaGuardado) {
+        try { await crearContraparte({ tipo: origenTipo, nombre: origen.trim() }); reloadContrapartes(); }
+        catch { /* duplicado u otra causa: no bloquea el ingreso */ }
+      }
       const etiqueta = moneda === 'Bs' ? `Bs · ${cuenta}` : moneda;
       notify(`Ingreso ${etiqueta} · ${monto(montoNum, moneda)} · ${origenStr} · genera cuenta por pagar`, 'success', { link: '#/app/tesoreria' });
       setMontoStr(''); setTasaStr(''); setOrigen(''); setOrigenTipo('');
@@ -918,22 +931,31 @@ function CajaDetalleModal({ caja, canWrite, actor, actorName, onClose, onChanged
                   );
                 })}
               </div>
-              {origenTipo && (
+              {origenTipo && (() => {
+                const guardados = contrapartes.filter((c) => c.tipo === origenTipo);
+                const existe = guardados.some((c) => c.nombre.trim().toUpperCase() === origen.trim().toUpperCase());
+                return (
                 <>
                   <input
                     className="input"
                     list="origen-contrapartes"
                     value={origen}
                     onChange={(e) => setOrigen(e.target.value)}
-                    placeholder={origenTipo === 'proveedor' ? 'Razón social del proveedor' : 'Nombre del cliente'}
+                    placeholder={origenTipo === 'proveedor' ? 'Buscar o agregar razón social del proveedor…' : 'Buscar o agregar nombre del cliente…'}
                     autoFocus
                   />
                   <datalist id="origen-contrapartes">
-                    {contrapartes.filter((c) => c.tipo === origenTipo).map((c) => <option key={c.id} value={c.nombre} />)}
+                    {guardados.map((c) => <option key={c.id} value={c.nombre} />)}
                   </datalist>
-                  <small className="muted">Elegí uno guardado o escribí uno nuevo. Gestionalos en “👥 Clientes / Proveedores”.</small>
+                  <small className="muted">
+                    Buscá en los {guardados.length} {origenTipo === 'proveedor' ? 'proveedor(es)' : 'cliente(s)'} guardados o escribí uno nuevo.{' '}
+                    {origen.trim() && !existe
+                      ? <strong style={{ color: 'var(--primary-3, #ff8a00)' }}>Nuevo → se guardará para próximos pagos.</strong>
+                      : 'Se gestionan en “👥 Clientes / Proveedores”.'}
+                  </small>
                 </>
-              )}
+                );
+              })()}
             </div>
           </div>
           {moneda !== 'Bs' && (Number(montoStr) || 0) > 0 && (Number(tasaStr) || 0) > 0 && (() => {

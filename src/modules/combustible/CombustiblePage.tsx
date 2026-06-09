@@ -9,7 +9,7 @@ import { useSession } from '@/modules/auth/authStore';
 import { usePermissions } from '@/modules/auth/PermissionsContext';
 import { getNombresAlmacenes } from '@/modules/inventario/almacenes.repository';
 import { DestinoSelect } from '@/modules/salidas/DestinoSelect';
-import type { Combustible, SolicitudCombustible } from '@/shared/lib/types';
+import type { Combustible, SolicitudCombustible, Tanque } from '@/shared/lib/types';
 import {
   listCombustibles,
   listSolicitudesCombustible,
@@ -22,6 +22,10 @@ import {
   finalizarSolicitudCombustible,
   cancelarSolicitudCombustible,
   consumoCombustiblePeriodo,
+  listTanques,
+  crearTanque,
+  actualizarTanque,
+  eliminarTanque,
 } from './combustible.repository';
 import { ConsumoChartModal } from '@/shared/ui/ConsumoChartModal';
 import { descargarSolicitudCombustiblePdf } from './combustiblePdf';
@@ -48,20 +52,24 @@ export function CombustiblePage() {
 
   const [combustibles, setCombustibles] = useState<Combustible[]>([]);
   const [solicitudes, setSolicitudes] = useState<SolicitudCombustible[]>([]);
+  const [tanques, setTanques] = useState<Tanque[]>([]);
   const [almacenes, setAlmacenes] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [vista, setVista] = useState<Vista>('kanban');
-  const [modal, setModal] = useState<'none' | 'solicitud' | 'ingreso' | 'gestionar' | 'consumo'>('none');
+  const [modal, setModal] = useState<'none' | 'solicitud' | 'ingreso' | 'gestionar' | 'consumo' | 'tanque'>('none');
   const [detalle, setDetalle] = useState<SolicitudCombustible | null>(null);
+  const [tanqueEdit, setTanqueEdit] = useState<Tanque | null>(null);
 
   const reload = useCallback(async () => {
-    const [cs, ss, alms] = await Promise.all([
+    const [cs, ss, ts, alms] = await Promise.all([
       listCombustibles(),
       listSolicitudesCombustible(),
+      listTanques(),
       getNombresAlmacenes(),
     ]);
     setCombustibles(cs);
     setSolicitudes(ss);
+    setTanques(ts);
     setAlmacenes(alms);
   }, []);
 
@@ -73,8 +81,8 @@ export function CombustiblePage() {
     return () => { cancel = true; };
   }, [reload]);
 
-  // Realtime multiusuario: combustibles y sus solicitudes se reflejan al instante.
-  useRealtime(['combustibles', 'combustible_solicitudes'], () => { void reload(); });
+  // Realtime multiusuario: combustibles, solicitudes y tanques se reflejan al instante.
+  useRealtime(['combustibles', 'combustible_solicitudes', 'combustible_tanques'], () => { void reload(); });
 
   const activos = useMemo(() => combustibles.filter((c) => c.estado === 'activo'), [combustibles]);
   const valorTotal = useMemo(() => combustibles.reduce((a, c) => a + (Number(c.litros) || 0) * (Number(c.costo_litro) || 0), 0), [combustibles]);
@@ -99,6 +107,7 @@ export function CombustiblePage() {
             <>
               {/* Sin combustibles, este es el ÚNICO botón que crea el primero: lo resaltamos. */}
               <button className={activos.length ? 'btn btn-ghost' : 'btn btn-primary'} onClick={() => setModal('gestionar')}>⛽ Combustibles</button>
+              <button className="btn btn-ghost" onClick={() => setModal('tanque')}>🛢 Agregar Tanque</button>
               <button className="btn btn-ghost" onClick={() => setModal('ingreso')} disabled={!activos.length} title={!activos.length ? 'Creá primero un combustible con "⛽ Combustibles"' : undefined}>⬇ Registrar ingreso</button>
               <button className="btn btn-primary" style={{ marginLeft: 'auto' }} onClick={() => setModal('solicitud')} disabled={!activos.length} title={!activos.length ? 'Creá primero un combustible con "⛽ Combustibles"' : undefined}>+ Nueva solicitud de salida</button>
             </>
@@ -135,6 +144,37 @@ export function CombustiblePage() {
           <div className="card"><p className="muted" style={{ margin: 0 }}>Sin combustibles. Creá uno con "⛽ Combustibles".</p></div>
         )}
       </div>
+
+      {/* Tanques (depósitos físicos) */}
+      {tanques.length > 0 && (
+        <div style={{ marginBottom: '1.25rem' }}>
+          <h2 style={{ fontSize: '1rem', margin: '0 0 .6rem' }}>🛢 Tanques</h2>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '1rem' }}>
+            {tanques.map((t) => {
+              const cap = Number(t.capacidad_litros) || 0;
+              const lit = Number(t.litros) || 0;
+              const pct = cap > 0 ? Math.min(100, Math.round((lit / cap) * 100)) : 0;
+              const color = pct >= 60 ? 'var(--success, #2ea043)' : pct >= 25 ? 'var(--warning, #ffae00)' : 'var(--danger, #e5484d)';
+              return (
+                <div key={t.id} className="card" style={{ opacity: t.estado === 'activo' ? 1 : 0.55, cursor: canWrite ? 'pointer' : 'default' }}
+                  onClick={() => { if (canWrite) setTanqueEdit(t); }}>
+                  <div className="card-title"><span>🛢 {t.nombre}</span>{t.estado !== 'activo' && <span className="badge">inactivo</span>}</div>
+                  <div className="mono" style={{ fontSize: '1.35rem', fontWeight: 700 }}>{num(lit)} <span style={{ fontSize: '.85rem', fontWeight: 400 }} className="muted">/ {num(cap)} L</span></div>
+                  {/* Medidor de nivel */}
+                  <div style={{ height: 10, borderRadius: 999, background: 'var(--border)', overflow: 'hidden', margin: '.5rem 0 .35rem' }}>
+                    <div style={{ width: `${pct}%`, height: '100%', background: color, transition: 'width .3s' }} />
+                  </div>
+                  <div className="muted" style={{ fontSize: '.8rem' }}>
+                    <div>Nivel: <strong style={{ color }}>{pct}%</strong></div>
+                    {t.combustible_nombre && <div>Combustible: <strong>⛽ {t.combustible_nombre}</strong></div>}
+                    {t.ubicacion && <div>Ubicación: <strong>{t.ubicacion}</strong></div>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Solicitudes */}
       <div className="filterbar" style={{ justifyContent: 'flex-end' }}>
@@ -202,6 +242,15 @@ export function CombustiblePage() {
       {modal === 'gestionar' && (
         <GestionarModal combustibles={combustibles} almacenes={almacenes} actor={actor}
           onClose={() => setModal('none')} onChanged={reload} />
+      )}
+      {(modal === 'tanque' || tanqueEdit) && (
+        <TanqueModal
+          tanque={tanqueEdit}
+          combustibles={combustibles}
+          actor={actor}
+          onClose={() => { setModal('none'); setTanqueEdit(null); }}
+          onSaved={async () => { setModal('none'); setTanqueEdit(null); await reload(); }}
+        />
       )}
       {modal === 'consumo' && (
         <ConsumoChartModal
@@ -511,6 +560,101 @@ function GestionarModal({ combustibles, almacenes, actor, onClose, onChanged }: 
           </div>
         </Modal>
       )}
+    </Modal>
+  );
+}
+
+/* ───────────── Modal: agregar / editar tanque ───────────── */
+function TanqueModal({ tanque, combustibles, actor, onClose, onSaved }: {
+  tanque: Tanque | null; combustibles: Combustible[]; actor: string;
+  onClose: () => void; onSaved: () => void;
+}) {
+  const esEdicion = !!tanque;
+  const [nombre, setNombre] = useState(tanque?.nombre ?? '');
+  const [combustibleId, setCombustibleId] = useState(tanque?.combustible_id ?? '');
+  const [capacidad, setCapacidad] = useState(tanque ? String(tanque.capacidad_litros) : '');
+  const [litros, setLitros] = useState(tanque ? String(tanque.litros) : '');
+  const [ubicacion, setUbicacion] = useState(tanque?.ubicacion ?? '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const capNum = Number(capacidad) || 0;
+  const litNum = Number(litros) || 0;
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (!nombre.trim()) { setError('Indicá el nombre del tanque.'); return; }
+    if (capNum <= 0) { setError('La capacidad debe ser mayor que 0.'); return; }
+    if (litNum > capNum) { setError('Los litros actuales no pueden superar la capacidad.'); return; }
+    setSaving(true);
+    try {
+      if (esEdicion && tanque) {
+        await actualizarTanque(tanque.id, {
+          nombre, combustibleId: combustibleId || null, capacidadLitros: capNum, litros: litNum, ubicacion,
+        });
+        notify(`Tanque "${nombre.trim()}" actualizado`, 'success', { link: '#/app/combustible' });
+      } else {
+        await crearTanque({
+          nombre, combustibleId: combustibleId || null, capacidadLitros: capNum,
+          litrosIniciales: litNum, ubicacion, actorEmail: actor,
+        });
+        notify(`Tanque "${nombre.trim()}" agregado · ${num(capNum)} L de capacidad`, 'success', { link: '#/app/combustible' });
+      }
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo guardar el tanque.');
+    } finally { setSaving(false); }
+  }
+
+  async function borrar() {
+    if (!tanque) return;
+    setSaving(true);
+    try { await eliminarTanque(tanque.id); notify(`Tanque "${tanque.nombre}" eliminado`, 'info', { link: '#/app/combustible' }); onSaved(); }
+    catch (e) { setError(e instanceof Error ? e.message : 'No se pudo eliminar'); setSaving(false); }
+  }
+
+  const footer = (
+    <>
+      {esEdicion && <button type="button" className="btn btn-danger" onClick={borrar} disabled={saving} style={{ marginRight: 'auto' }}>Eliminar</button>}
+      <button type="button" className="btn btn-ghost" onClick={onClose} disabled={saving}>Cancelar</button>
+      <button type="submit" form="tanque-form" className="btn btn-primary" disabled={saving}>
+        {saving ? 'Guardando…' : esEdicion ? 'Guardar cambios' : 'Agregar tanque'}
+      </button>
+    </>
+  );
+
+  return (
+    <Modal title={esEdicion ? `Editar tanque · ${tanque?.nombre}` : 'Agregar tanque'} size="md" onClose={onClose} footer={footer}>
+      <form id="tanque-form" onSubmit={submit}>
+        {error && <div className="card" style={{ borderColor: 'var(--danger)', marginBottom: '.75rem' }}><strong>Error:</strong> {error}</div>}
+        <div className="form-row">
+          <label>Nombre del tanque *</label>
+          <input className="input" value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Tanque Principal, Tanque Patio…" autoFocus required />
+        </div>
+        <div className="form-grid">
+          <div className="form-row">
+            <label>Capacidad máxima (L) *</label>
+            <input className="input mono" type="number" min={0} step="any" value={capacidad} onChange={(e) => setCapacidad(e.target.value)} required />
+          </div>
+          <div className="form-row">
+            <label>Litros actuales</label>
+            <input className="input mono" type="number" min={0} step="any" value={litros} onChange={(e) => setLitros(e.target.value)} />
+            {capNum > 0 && <small className="muted">Nivel: <strong>{Math.min(100, Math.round((litNum / capNum) * 100))}%</strong></small>}
+          </div>
+        </div>
+        <div className="form-row">
+          <label>Combustible que almacena</label>
+          <select className="select" value={combustibleId} onChange={(e) => setCombustibleId(e.target.value)}>
+            <option value="">— sin asignar —</option>
+            {combustibles.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+          </select>
+        </div>
+        <div className="form-row">
+          <label>Ubicación</label>
+          <input className="input" value={ubicacion} onChange={(e) => setUbicacion(e.target.value)} placeholder="Patio Matanzas, Sede Los Pinos…" />
+        </div>
+      </form>
     </Modal>
   );
 }
